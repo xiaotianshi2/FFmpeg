@@ -302,7 +302,11 @@ static int segment_list_open(AVFormatContext *s)
 
         for (entry = seg->segment_list_entries; entry; entry = entry->next)
             max_duration = FFMAX(max_duration, entry->end_time - entry->start_time);
-        avio_printf(seg->list_pb, "#EXT-X-TARGETDURATION:%"PRId64"\n", (int64_t)ceil(max_duration));
+        // TODO: Properly scan for the max duration of not just this playlist
+        // but also of any other playlists produced alongside this (e.g: media_0.m3u8 and media_1.m3u8);
+        // their values should be equal to the maximum amongst all of them
+        // avio_printf(seg->list_pb, "#EXT-X-TARGETDURATION:%"PRId64"\n", (int64_t)ceil(max_duration));
+        avio_printf(seg->list_pb, "#EXT-X-TARGETDURATION:%"PRId64"\n", (int64_t)2);
     } else if (seg->list_type == LIST_TYPE_FFCONCAT) {
         avio_printf(seg->list_pb, "ffconcat version 1.0\n");
     }
