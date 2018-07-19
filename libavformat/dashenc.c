@@ -909,7 +909,8 @@ static int write_manifest(AVFormatContext *s, int final)
                 stream_bitrate += max_audio_bitrate;
             }
             get_hls_playlist_name(playlist_file, sizeof(playlist_file), NULL, i);
-            ff_hls_write_stream_info(st, out, stream_bitrate, playlist_file, agroup, NULL, NULL);
+            // TODO: Replace temporary hardcoded codec string by actually correct string
+            ff_hls_write_stream_info(st, out, stream_bitrate, playlist_file, agroup, "avc1.64001f,mp4a.40.2", NULL);
         }
         avio_close(out);
         if (use_rename)
