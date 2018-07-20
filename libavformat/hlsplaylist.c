@@ -82,7 +82,7 @@ static void ff_hls_write_program_date_time(AVIOContext *out) {
     tm = localtime_r(&tt, &tmpbuf);
     if (!strftime(buf0, sizeof(buf0), "%Y-%m-%dT%H:%M:%S", tm)) {
         av_log(NULL, AV_LOG_DEBUG, "strftime error in ff_hls_write_file_entry\n");
-        return AVERROR_UNKNOWN;
+        return;
     }
     if (!strftime(buf1, sizeof(buf1), "%z", tm) || buf1[1]<'0' ||buf1[1]>'2') {
         int tz_min, dst = tm->tm_isdst;
