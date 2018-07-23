@@ -34,7 +34,7 @@ brew install nasm x264
 # Make
 # ====
 
-make
+make -j 8
 
 
 # Copy
