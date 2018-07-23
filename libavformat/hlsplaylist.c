@@ -76,8 +76,9 @@ static void ff_hls_write_program_date_time(AVIOContext *out) {
     int milli;
     struct tm *tm, tmpbuf;
     char buf0[128], buf1[128];
-    
+
     time(&now0);
+    tt = (int64_t)now0;
     milli = av_clip(lrint(1000*(now0 - tt)), 0, 999);
     tm = localtime_r(&tt, &tmpbuf);
     if (!strftime(buf0, sizeof(buf0), "%Y-%m-%dT%H:%M:%S", tm)) {
