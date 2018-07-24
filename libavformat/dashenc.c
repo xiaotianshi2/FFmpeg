@@ -133,6 +133,7 @@ typedef struct DASHContext {
     char *format_options_str;
     SegmentType segment_type;
     const char *format_name;
+    time_t initial_prog_date_time;
 } DASHContext;
 
 static struct codec_string {
@@ -483,8 +484,11 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
                 target_duration = lrint(duration);
         }
 
+        if (!c->initial_prog_date_time)
+             time(&c->initial_prog_date_time);
+
         ff_hls_write_playlist_header(c->m3u8_out, 6, -1, target_duration,
-                                     start_number, PLAYLIST_TYPE_NONE);
+                                     start_number, PLAYLIST_TYPE_NONE, c->initial_prog_date_time);
 
         ff_hls_write_init_file(c->m3u8_out, os->initfile, c->single_file,
                                os->init_range_length, os->init_start_pos);
