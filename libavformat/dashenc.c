@@ -394,7 +394,7 @@ static void dash_free(AVFormatContext *s)
 }
 
 static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatContext *s,
-                                int representation_id, int final)
+                                int representation_id, int final, int target_duration)
 {
     DASHContext *c = s->priv_data;
     int i, start_index = 0, start_number = 1;
@@ -465,7 +465,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         char temp_filename_hls[1024];
         char filename_hls[1024];
         AVDictionary *http_opts = NULL;
-        int target_duration = 0;
         int ret = 0;
         const char *proto = avio_find_protocol_name(c->dirname);
         int use_rename = proto && !strcmp(proto, "file");
@@ -478,12 +477,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         set_http_options(&http_opts, c);
         dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
         av_dict_free(&http_opts);
-        for (i = start_index; i < os->nb_segments; i++) {
-            Segment *seg = os->segments[i];
-            double duration = (double) seg->duration / timescale;
-            if (target_duration <= duration)
-                target_duration = lrint(duration);
-        }
 
         if (!c->date_set) {
             time_t now0;
@@ -615,6 +608,25 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     if (role)
         avio_printf(out, "\t\t\t<Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"%s\"/>\n", role->value);
 
+    // Moved target duration calculation from output_segment_list here to result in consistent value across streams
+    // mediastreamvalidator is still complaining about "Different target durations" sometimes though :(
+    // TODO: Completely fix the duration "MUST fix" (according to mediastreamvalidator) issue
+    int j, target_duration = 0;
+    for (i = 0; i < s->nb_streams; i++) {
+        OutputStream *os = &c->streams[i];
+        int start_index = 0;
+        if (c->window_size) {
+            start_index  = FFMAX(os->nb_segments - c->window_size, 0);
+        }
+        int timescale = os->ctx->streams[0]->time_base.den;
+        for (j = start_index; j < os->nb_segments; j++) {
+            Segment *seg = os->segments[j];
+            double duration = (double) seg->duration / timescale;
+            if (target_duration <= duration)
+                target_duration = lrint(duration);
+        }
+    }
+
     for (i = 0; i < s->nb_streams; i++) {
         OutputStream *os = &c->streams[i];
         char bandwidth_str[64] = {'\0'};
@@ -639,7 +651,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
             avio_printf(out, "\t\t\t\t<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"%d\" />\n",
                 s->streams[i]->codecpar->channels);
         }
-        output_segment_list(os, out, s, i, final);
+        output_segment_list(os, out, s, i, final, target_duration);
         avio_printf(out, "\t\t\t</Representation>\n");
     }
     avio_printf(out, "\t\t</AdaptationSet>\n");
