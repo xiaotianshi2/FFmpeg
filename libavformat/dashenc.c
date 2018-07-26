@@ -133,7 +133,8 @@ typedef struct DASHContext {
     char *format_options_str;
     SegmentType segment_type;
     const char *format_name;
-    time_t initial_prog_date_time;
+    double initial_prog_date_time;
+    int date_set;
 } DASHContext;
 
 static struct codec_string {
@@ -484,11 +485,19 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
                 target_duration = lrint(duration);
         }
 
-        if (!c->initial_prog_date_time)
-             time(&c->initial_prog_date_time);
+        if (!c->date_set) {
+            time_t now0;
+            time(&now0);
+            c->initial_prog_date_time = now0;
+            printf("dashenc initial prog date set");
+            c->date_set = 1;
+        }
+
+        double prog_date_time = c->initial_prog_date_time;
+        double *prog_date_time_p = &prog_date_time;
 
         ff_hls_write_playlist_header(c->m3u8_out, 6, -1, target_duration,
-                                     start_number, PLAYLIST_TYPE_NONE, c->initial_prog_date_time);
+                                     start_number, PLAYLIST_TYPE_NONE);
 
         ff_hls_write_init_file(c->m3u8_out, os->initfile, c->single_file,
                                os->init_range_length, os->init_start_pos);
@@ -499,7 +508,7 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
                                     (double) seg->duration / timescale, 0,
                                     seg->range_length, seg->start_pos, NULL,
                                     c->single_file ? os->initfile : seg->file,
-                                    NULL);
+                                    prog_date_time_p);
             if (ret < 0) {
                 av_log(os->ctx, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
             }

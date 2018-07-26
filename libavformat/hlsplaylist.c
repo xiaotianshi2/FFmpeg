@@ -71,37 +71,9 @@ void ff_hls_write_stream_info(AVStream *st, AVIOContext *out,
     avio_printf(out, "\n%s\n\n", filename);
 }
 
-static void ff_hls_write_program_date_time(AVIOContext *out, time_t initial_prog_date_time) {
-    time_t tt, wrongsecs;
-    int milli;
-    struct tm *tm, tmpbuf;
-    char buf0[128], buf1[128];
-
-    tt = (int64_t)initial_prog_date_time;
-    milli = av_clip(lrint(1000*(initial_prog_date_time - tt)), 0, 999);
-    tm = localtime_r(&tt, &tmpbuf);
-    if (!strftime(buf0, sizeof(buf0), "%Y-%m-%dT%H:%M:%S", tm)) {
-        av_log(NULL, AV_LOG_DEBUG, "strftime error in ff_hls_write_file_entry\n");
-        return;
-    }
-    if (!strftime(buf1, sizeof(buf1), "%z", tm) || buf1[1]<'0' ||buf1[1]>'2') {
-        int tz_min, dst = tm->tm_isdst;
-        tm = gmtime_r(&tt, &tmpbuf);
-        tm->tm_isdst = dst;
-        wrongsecs = mktime(tm);
-        tz_min = (FFABS(wrongsecs - tt) + 30) / 60;
-        snprintf(buf1, sizeof(buf1),
-                    "%c%02d%02d",
-                    wrongsecs <= tt ? '+' : '-',
-                    tz_min / 60,
-                    tz_min % 60);
-    }
-    avio_printf(out, "#EXT-X-PROGRAM-DATE-TIME:%s.%03d%s\n", buf0, milli, buf1);
-}
-
 void ff_hls_write_playlist_header(AVIOContext *out, int version, int allowcache,
                                   int target_duration, int64_t sequence,
-                                  uint32_t playlist_type, time_t initial_prog_date_time) {
+                                  uint32_t playlist_type) {
     if (!out)
         return;
     ff_hls_write_playlist_version(out, version);
@@ -117,9 +89,6 @@ void ff_hls_write_playlist_header(AVIOContext *out, int version, int allowcache,
     } else if (playlist_type == PLAYLIST_TYPE_VOD) {
         avio_printf(out, "#EXT-X-PLAYLIST-TYPE:VOD\n");
     }
-    
-    if (initial_prog_date_time)
-        ff_hls_write_program_date_time(out, initial_prog_date_time);
 }
 
 void ff_hls_write_init_file(AVIOContext *out, char *filename,
