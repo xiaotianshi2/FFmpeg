@@ -30,14 +30,3 @@ brew install nasm x264
 # --disable-ffplay                        To prevent needless building
 
 ./configure --cc=/usr/bin/clang --enable-gpl --enable-libx264 --pkg-config-flags=--static --disable-ffplay
-
-# Make
-# ====
-
-make -j 8
-
-
-# Copy
-# ====
-
-cp ffmpeg ../playtrivia-video-tests/ffmpeg-exmg-lls-osx
