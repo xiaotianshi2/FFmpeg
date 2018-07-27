@@ -793,6 +793,45 @@ end:
     return 0;
 }
 
+// This is an adapted version of write_codec_attr() from hlsenc.c
+static void write_codec_attr(char *codec_attr, long codec_size, AVStream *st) {
+    int codec_strlen = strlen(codec_attr);
+    char attr[32];
+
+    if (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+        return;
+
+    if (st->codecpar->codec_id == AV_CODEC_ID_H264) {
+        uint8_t *data = st->codecpar->extradata;
+        if (data && (data[0] | data[1] | data[2]) == 0 && data[3] == 1 && (data[4] & 0x1F) == 7) {
+            snprintf(attr, sizeof(attr),
+                     "avc1.%02x%02x%02x", data[5], data[6], data[7]);
+        } else {
+            return;
+        }
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_MP2) {
+        snprintf(attr, sizeof(attr), "mp4a.40.33");
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_MP3) {
+        snprintf(attr, sizeof(attr), "mp4a.40.34");
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_AAC) {
+        /* TODO : For HE-AAC, HE-AACv2, the last digit needs to be set to 5 and 29 respectively */
+        snprintf(attr, sizeof(attr), "mp4a.40.2");
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_AC3) {
+        snprintf(attr, sizeof(attr), "ac-3");
+    } else if (st->codecpar->codec_id == AV_CODEC_ID_EAC3) {
+        snprintf(attr, sizeof(attr), "ec-3");
+    } else {
+        return;
+    }
+    // Don't write the same attribute multiple times
+    if (!av_stristr(codec_attr, attr)) {
+        snprintf(codec_attr + codec_strlen,
+                 codec_size - codec_strlen,
+                 "%s%s", codec_strlen ? "," : "", attr);
+    }
+    return;
+}
+
 static int write_manifest(AVFormatContext *s, int final)
 {
     DASHContext *c = s->priv_data;
@@ -891,6 +930,7 @@ static int write_manifest(AVFormatContext *s, int final)
         const char *audio_group = "A1";
         int is_default = 1;
         int max_audio_bitrate = 0;
+        char codec_attr[128] = "";
 
         if (*c->dirname)
             snprintf(filename_hls, sizeof(filename_hls), "%s/master.m3u8", c->dirname);
@@ -913,6 +953,7 @@ static int write_manifest(AVFormatContext *s, int final)
             char playlist_file[64];
             AVStream *st = s->streams[i];
             OutputStream *os = &c->streams[i];
+            write_codec_attr(codec_attr, sizeof(codec_attr), st);
             if (st->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
                 continue;
             get_hls_playlist_name(playlist_file, sizeof(playlist_file), NULL, i);
@@ -933,12 +974,11 @@ static int write_manifest(AVFormatContext *s, int final)
                 agroup = (char *)audio_group;
                 stream_bitrate += max_audio_bitrate;
             }
+            // Audio playlist should not be listed like a variant; audio reference is already added via group
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+                continue;
             get_hls_playlist_name(playlist_file, sizeof(playlist_file), NULL, i);
-            // TODO: Find a cleaner way of preventing output the second (audio) playlist reference 
-            if (i == 0) {
-                // TODO: Replace temporary hardcoded codec string by actually correct string
-                ff_hls_write_stream_info(st, out, stream_bitrate, playlist_file, agroup, (char *)"avc1.64001f,mp4a.40.2", NULL);
-            }
+            ff_hls_write_stream_info(st, out, stream_bitrate, playlist_file, agroup, codec_attr, NULL);
         }
         avio_close(out);
         if (use_rename)
