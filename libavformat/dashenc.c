@@ -482,6 +482,14 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
             time_t now0;
             time(&now0);
             c->initial_prog_date_time = now0;
+
+            // Subtract initial segment's duration to result in stream start time
+            if (os->nb_segments == 1) {
+                c->initial_prog_date_time -= os->segments[0]->duration / timescale;
+            } else {
+                av_log(os->ctx, AV_LOG_WARNING, "HLS initial prog date time should be set on first segment\n");
+            }
+
             c->date_set = 1;
         }
 
