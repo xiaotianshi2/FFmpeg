@@ -482,12 +482,10 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
             time_t now0;
             time(&now0);
             c->initial_prog_date_time = now0;
-            printf("dashenc initial prog date set");
             c->date_set = 1;
         }
 
         double prog_date_time = c->initial_prog_date_time;
-        double *prog_date_time_p = &prog_date_time;
 
         ff_hls_write_playlist_header(c->m3u8_out, 6, -1, target_duration,
                                      start_number, PLAYLIST_TYPE_NONE);
@@ -495,13 +493,18 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         ff_hls_write_init_file(c->m3u8_out, os->initfile, c->single_file,
                                os->init_range_length, os->init_start_pos);
 
-        for (i = start_index; i < os->nb_segments; i++) {
+        for (i = 0; i < os->nb_segments; i++) {
             Segment *seg = os->segments[i];
+            double duration = (double) seg->duration / timescale;
+            prog_date_time += duration;
+            if (i < start_index) {
+                continue;
+            }
             ret = ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
-                                    (double) seg->duration / timescale, 0,
+                                    duration, 0,
                                     seg->range_length, seg->start_pos, NULL,
                                     c->single_file ? os->initfile : seg->file,
-                                    prog_date_time_p);
+                                    &prog_date_time);
             if (ret < 0) {
                 av_log(os->ctx, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
             }

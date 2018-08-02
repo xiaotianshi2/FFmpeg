@@ -146,7 +146,6 @@ int ff_hls_write_file_entry(AVIOContext *out, int insert_discont,
                      tz_min % 60);
         // }
         avio_printf(out, "#EXT-X-PROGRAM-DATE-TIME:%s.%03d%s\n", buf0, milli, buf1);
-        *prog_date_time += duration;
     }
     if (baseurl)
         avio_printf(out, "%s", baseurl);
