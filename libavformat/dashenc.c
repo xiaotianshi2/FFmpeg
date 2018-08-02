@@ -504,18 +504,17 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         for (i = 0; i < os->nb_segments; i++) {
             Segment *seg = os->segments[i];
             double duration = (double) seg->duration / timescale;
+            if (i >= start_index) {
+                ret = ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
+                                        duration, 0,
+                                        seg->range_length, seg->start_pos, NULL,
+                                        c->single_file ? os->initfile : seg->file,
+                                        &prog_date_time);
+                if (ret < 0) {
+                    av_log(os->ctx, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
+                }
+            }
             prog_date_time += duration;
-            if (i < start_index) {
-                continue;
-            }
-            ret = ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
-                                    duration, 0,
-                                    seg->range_length, seg->start_pos, NULL,
-                                    c->single_file ? os->initfile : seg->file,
-                                    &prog_date_time);
-            if (ret < 0) {
-                av_log(os->ctx, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
-            }
         }
 
         if (final)
