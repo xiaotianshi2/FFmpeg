@@ -131,18 +131,20 @@ int ff_hls_write_file_entry(AVIOContext *out, int insert_discont,
             av_log(NULL, AV_LOG_DEBUG, "strftime error in ff_hls_write_file_entry\n");
             return AVERROR_UNKNOWN;
         }
-        if (!strftime(buf1, sizeof(buf1), "%z", tm) || buf1[1]<'0' ||buf1[1]>'2') {
+        // Quick patch to add colon in time zone, e.g: +0200 => +02:00 to make it ISO8601 compliant
+        // TODO: Test, e.g: verify this still works on Linux and/or improve this
+        // if (!strftime(buf1, sizeof(buf1), "%z", tm) || buf1[1]<'0' ||buf1[1]>'2') {
             int tz_min, dst = tm->tm_isdst;
             tm = gmtime_r(&tt, &tmpbuf);
             tm->tm_isdst = dst;
             wrongsecs = mktime(tm);
             tz_min = (FFABS(wrongsecs - tt) + 30) / 60;
             snprintf(buf1, sizeof(buf1),
-                     "%c%02d%02d",
+                     "%c%02d:%02d",
                      wrongsecs <= tt ? '+' : '-',
                      tz_min / 60,
                      tz_min % 60);
-        }
+        // }
         avio_printf(out, "#EXT-X-PROGRAM-DATE-TIME:%s.%03d%s\n", buf0, milli, buf1);
         *prog_date_time += duration;
     }
