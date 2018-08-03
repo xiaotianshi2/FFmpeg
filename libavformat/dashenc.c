@@ -618,18 +618,13 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     if (role)
         avio_printf(out, "\t\t\t<Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"%s\"/>\n", role->value);
 
-    // Moved target duration calculation from output_segment_list here to result in consistent value across streams
-    // mediastreamvalidator is still complaining about "Different target durations" sometimes though :(
-    // TODO: Completely fix the duration "MUST fix" (according to mediastreamvalidator) issue
+    // Moved target duration calculation here to result in consistent value across streams and time
+    // TODO: Just use segment size and prevent segments from exceeding that
     int j, target_duration = 0;
     for (i = 0; i < s->nb_streams; i++) {
         OutputStream *os = &c->streams[i];
-        int start_index = 0;
-        if (c->window_size) {
-            start_index  = FFMAX(os->nb_segments - c->window_size, 0);
-        }
         int timescale = os->ctx->streams[0]->time_base.den;
-        for (j = start_index; j < os->nb_segments; j++) {
+        for (j = 0; j < os->nb_segments; j++) {
             Segment *seg = os->segments[j];
             double duration = (double) seg->duration / timescale;
             if (target_duration <= duration)
