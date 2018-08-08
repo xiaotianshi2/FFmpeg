@@ -128,6 +128,7 @@ typedef struct DASHContext {
     AVIOContext *mpd_out;
     AVIOContext *m3u8_out;
     AVIOContext *timecode_out;
+    AVIOContext *delete_out;
     int streaming;
     int64_t timeout;
     int index_correction;
@@ -393,6 +394,7 @@ static void dash_free(AVFormatContext *s)
     ff_format_io_close(s, &c->mpd_out);
     ff_format_io_close(s, &c->m3u8_out);
     ff_format_io_close(s, &c->timecode_out);
+    ff_format_io_close(s, &c->delete_out);
 }
 
 static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatContext *s,
@@ -1335,23 +1337,22 @@ static int update_stream_extradata(AVFormatContext *s, OutputStream *os,
     return 0;
 }
 
-static void dashenc_delete_file(AVFormatContext *s, char *filename) {
+static void dashenc_delete_file(AVFormatContext *s, AVIOContext **delete_out, char *filename) {
     DASHContext *c = s->priv_data;
     int http_base_proto = ff_is_http_proto(filename);
 
     if (http_base_proto) {
-        AVIOContext *out = NULL;
         AVDictionary *http_opts = NULL;
 
         set_http_options(&http_opts, c);
         av_dict_set(&http_opts, "method", "DELETE", 0);
 
-        if (dashenc_io_open(s, &out, filename, &http_opts) < 0) {
+        if (dashenc_io_open(s, delete_out, filename, &http_opts) < 0) {
             av_log(s, AV_LOG_ERROR, "failed to delete %s\n", filename);
         }
 
         av_dict_free(&http_opts);
-        dashenc_io_close(s, &out, filename);
+        dashenc_io_close(s, delete_out, filename);
     } else if (unlink(filename) < 0) {
         av_log(s, AV_LOG_ERROR, "failed to delete %s: %s\n", filename, strerror(errno));
     }
@@ -1457,7 +1458,7 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
                 for (j = 0; j < remove; j++) {
                     char filename[1024];
                     snprintf(filename, sizeof(filename), "%s%s", c->dirname, os->segments[j]->file);
-                    dashenc_delete_file(s, filename);
+                    dashenc_delete_file(s, &c->delete_out, filename);
                     av_free(os->segments[j]);
                 }
                 os->nb_segments -= remove;
@@ -1635,9 +1636,9 @@ static int dash_write_trailer(AVFormatContext *s)
         for (i = 0; i < s->nb_streams; i++) {
             OutputStream *os = &c->streams[i];
             snprintf(filename, sizeof(filename), "%s%s", c->dirname, os->initfile);
-            dashenc_delete_file(s, filename);
+            dashenc_delete_file(s, &c->delete_out, filename);
         }
-        dashenc_delete_file(s, s->url);
+        dashenc_delete_file(s, &c->delete_out, s->url);
     }
 
     return 0;
