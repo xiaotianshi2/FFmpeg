@@ -61,6 +61,10 @@ typedef struct Segment {
     int64_t time;
     int duration;
     int n;
+    char timecode_file[1024];
+    double duration_seconds;
+    double start_seconds;
+    double start_date;
 } Segment;
 
 typedef struct AdaptationSet {
@@ -93,6 +97,7 @@ typedef struct OutputStream {
     double availability_time_offset;
     int total_pkt_size;
     int muxer_overhead;
+    double initial_prog_date_time;
 } OutputStream;
 
 typedef struct DASHContext {
@@ -129,14 +134,13 @@ typedef struct DASHContext {
     AVIOContext *m3u8_out;
     AVIOContext *timecode_out;
     AVIOContext *delete_out;
+    AVIOContext *timecode_vtt_out;
     int streaming;
     int64_t timeout;
     int index_correction;
     char *format_options_str;
     SegmentType segment_type;
     const char *format_name;
-    double initial_prog_date_time;
-    int date_set;
 } DASHContext;
 
 static struct codec_string {
@@ -395,6 +399,7 @@ static void dash_free(AVFormatContext *s)
     ff_format_io_close(s, &c->m3u8_out);
     ff_format_io_close(s, &c->timecode_out);
     ff_format_io_close(s, &c->delete_out);
+    ff_format_io_close(s, &c->timecode_vtt_out);
 }
 
 static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatContext *s,
@@ -490,23 +495,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         }
         av_dict_free(&http_opts);
 
-        if (!c->date_set) {
-            time_t now0;
-            time(&now0);
-            c->initial_prog_date_time = now0;
-
-            // Subtract initial segment's duration to result in stream start time
-            if (os->nb_segments == 1) {
-                c->initial_prog_date_time -= os->segments[0]->duration / timescale;
-            } else {
-                av_log(os->ctx, AV_LOG_WARNING, "HLS initial prog date time should be set on first segment\n");
-            }
-
-            c->date_set = 1;
-        }
-
-        double prog_date_time = c->initial_prog_date_time;
-
         ff_hls_write_playlist_header(c->m3u8_out, 6, -1, target_duration,
                                      start_number, PLAYLIST_TYPE_NONE);
 
@@ -527,25 +515,20 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
                                         duration, 0,
                                         seg->range_length, seg->start_pos, NULL,
                                         c->single_file ? os->initfile : seg->file,
-                                        &prog_date_time);
+                                        &seg->start_date);
                 if (ret < 0) {
                     av_log(os->ctx, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
                 }
 
                 // Also output our custom timecode subtitle playlist
                 if (as->media_type == AVMEDIA_TYPE_VIDEO) {
-                    char timecode_vtt_file[1024];
-                    // TODO: Use same file previously generated for writing VTT to, e.g: including our timestamp subdirectory
-                    snprintf(timecode_vtt_file, sizeof(timecode_vtt_file), "timecode-%05d.vtt", i + 1);
                     ff_hls_write_file_entry(c->timecode_out, 0, c->single_file,
                                             duration, 0,
                                             seg->range_length, seg->start_pos, NULL,
-                                            timecode_vtt_file,
+                                            seg->timecode_file,
                                             NULL);
-                    av_log(s, AV_LOG_INFO, "%s -> %s\n", timecode_file, timecode_vtt_file);
                 }
             }
-            prog_date_time += duration;
         }
 
         if (final)
@@ -1009,7 +992,8 @@ static int write_manifest(AVFormatContext *s, int final)
         }
 
         // Add our custom timecode subtitle reference
-        avio_printf(out, "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"timecode\",NAME=\"Timecode\",URI=\"timecode.m3u8\"\n");
+        // TODO: Remove DEFAULT=YES,AUTOSELECT=YES when we no longer wish to show this by default (nice for testing now)
+        avio_printf(out, "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"timecode\",NAME=\"Timecode\",URI=\"timecode.m3u8\",DEFAULT=YES,AUTOSELECT=YES\n");
 
         for (i = 0; i < s->nb_streams; i++) {
             char playlist_file[64];
@@ -1241,7 +1225,7 @@ static int dash_write_header(AVFormatContext *s)
 }
 
 static int add_segment(OutputStream *os, const char *file,
-                       int64_t time, int duration,
+                       int64_t seg_time, int duration,
                        int64_t start_pos, int64_t range_length,
                        int64_t index_length, int next_exp_index)
 {
@@ -1260,7 +1244,7 @@ static int add_segment(OutputStream *os, const char *file,
     if (!seg)
         return AVERROR(ENOMEM);
     av_strlcpy(seg->file, file, sizeof(seg->file));
-    seg->time = time;
+    seg->time = seg_time;
     seg->duration = duration;
     if (seg->time < 0) { // If pts<0, it is expected to be cut away with an edit list
         seg->duration += seg->time;
@@ -1277,6 +1261,28 @@ static int add_segment(OutputStream *os, const char *file,
                file, os->segment_index, next_exp_index);
         os->segment_index = next_exp_index;
     }
+
+    // Prepare -timecode.vtt file path
+    int extensionless_len = strlen(file) - strlen(strrchr(file, '.'));
+    snprintf(seg->timecode_file, sizeof(seg->timecode_file), "%.*s-timecode.vtt", extensionless_len, file);
+
+    // Store segment start date
+    int this_index = os->nb_segments - 1;
+    AVRational time_base = os->ctx->streams[0]->time_base;
+    double timescale = (double) time_base.num / time_base.den;
+    seg->duration_seconds = timescale * seg->duration;
+    if (this_index == 0) {
+        time_t now;
+        time(&now);
+        os->initial_prog_date_time = now - seg->duration_seconds;
+        seg->start_seconds = 0;
+        seg->start_date = os->initial_prog_date_time;
+    } else {
+        Segment *prev_seg = os->segments[this_index - 1];
+        seg->start_seconds = prev_seg->start_seconds + prev_seg->duration_seconds;
+        seg->start_date = prev_seg->start_date + prev_seg->duration_seconds;
+    }
+
     return 0;
 }
 
@@ -1356,6 +1362,43 @@ static void dashenc_delete_file(AVFormatContext *s, AVIOContext **delete_out, ch
     } else if (unlink(filename) < 0) {
         av_log(s, AV_LOG_ERROR, "failed to delete %s: %s\n", filename, strerror(errno));
     }
+}
+
+static void write_vtt_time(char *str, int str_size, double total_s) {
+    int h = total_s / 3600;
+    double rem_s = total_s - (h * 3600);
+    int m = rem_s / 60;
+    rem_s -= m * 60;
+    int s = rem_s;
+    rem_s -= s;
+    int ms = rem_s * 1000;
+    snprintf(str, str_size, "%02d:%02d:%02d.%03d", h, m, s, ms);
+}
+
+// Write our custom timecode subtitle file
+static void write_timecode_vtt(AVFormatContext *s, OutputStream *os) {
+    DASHContext *c = s->priv_data;
+    AVDictionary *opts = NULL;
+    Segment *seg = os->segments[os->nb_segments - 1];
+    char timecode_path[1024];
+    char start_time[20];
+    char end_time[20];
+    char start_date[128];
+
+    snprintf(timecode_path, sizeof(timecode_path), "%s%s", c->dirname, seg->timecode_file);
+
+    set_http_options(&opts, c);
+    if (dashenc_io_open(s, &c->timecode_vtt_out, timecode_path, &opts) < 0) {
+        av_log(s, AV_LOG_ERROR, "failed to open %s\n", timecode_path);
+    }
+    av_dict_free(&opts);
+
+    write_vtt_time(start_time, sizeof(start_time), seg->start_seconds);
+    write_vtt_time(end_time, sizeof(end_time), seg->start_seconds + seg->duration_seconds);
+    ff_hls_write_iso8601_date(start_date, sizeof(start_date), seg->start_date);
+    avio_printf(c->timecode_vtt_out, "WEBVTT\n\n%s --> %s\n%s %s\n", start_time, end_time, start_time, start_date);
+
+    dashenc_io_close(s, &c->timecode_vtt_out, timecode_path);
 }
 
 static int dash_flush(AVFormatContext *s, int final, int stream)
@@ -1443,6 +1486,11 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         }
         add_segment(os, os->filename, os->start_pts, os->max_pts - os->start_pts, os->pos, range_length, index_length, next_exp_index);
         av_log(s, AV_LOG_VERBOSE, "Representation %d media segment %d written to: %s\n", i, os->segment_index, os->full_path);
+
+        // Write our custom timecode subtitle file
+        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            write_timecode_vtt(s, os);
+        }
 
         os->pos += range_length;
     }
@@ -1590,10 +1638,6 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (ret < 0)
             return ret;
         av_dict_free(&opts);
-
-        // TODO: Write timecode subtitle file, e.g: http://.../1234567890/timecode-00001.vtt
-        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-            av_log(s, AV_LOG_INFO, "TODO: Write timecode subtitle file next to: %s\n", os->temp_path);
     }
 
     //write out the data immediately in streaming mode
