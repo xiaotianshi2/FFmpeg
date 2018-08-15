@@ -127,7 +127,6 @@ typedef struct DASHContext {
     int master_playlist_created;
     AVIOContext *mpd_out;
     AVIOContext *m3u8_out;
-    AVIOContext *timecode_out;
     AVIOContext *delete_out;
     int streaming;
     int64_t timeout;
@@ -393,13 +392,11 @@ static void dash_free(AVFormatContext *s)
 
     ff_format_io_close(s, &c->mpd_out);
     ff_format_io_close(s, &c->m3u8_out);
-    ff_format_io_close(s, &c->timecode_out);
     ff_format_io_close(s, &c->delete_out);
 }
 
 static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatContext *s,
-                                int representation_id, int final, int target_duration,
-                                AdaptationSet *as)
+                                int representation_id, int final, int target_duration)
 {
     DASHContext *c = s->priv_data;
     int i, start_index = 0, start_number = 1;
@@ -473,7 +470,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         int ret = 0;
         const char *proto = avio_find_protocol_name(c->dirname);
         int use_rename = proto && !strcmp(proto, "file");
-        char timecode_file[1024];
 
         get_hls_playlist_name(filename_hls, sizeof(filename_hls),
                               c->dirname, representation_id);
@@ -482,12 +478,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
 
         set_http_options(&http_opts, c);
         dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
-        // Also output our custom timecode subtitle playlist
-        // Note: No single file, representation id (multi video?) or rename support for now
-        if (as->media_type == AVMEDIA_TYPE_VIDEO) {
-            snprintf(timecode_file, sizeof(timecode_file), "%stimecode.m3u8", c->dirname);
-            dashenc_io_open(s, &c->timecode_out, timecode_file, &http_opts);
-        }
         av_dict_free(&http_opts);
 
         if (!c->date_set) {
@@ -510,12 +500,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         ff_hls_write_playlist_header(c->m3u8_out, 6, -1, target_duration,
                                      start_number, PLAYLIST_TYPE_NONE);
 
-        // Also output our custom timecode subtitle playlist
-        if (as->media_type == AVMEDIA_TYPE_VIDEO) {
-            ff_hls_write_playlist_header(c->timecode_out, 6, -1, target_duration,
-                                        start_number, PLAYLIST_TYPE_NONE);
-        }
-
         ff_hls_write_init_file(c->m3u8_out, os->initfile, c->single_file,
                                os->init_range_length, os->init_start_pos);
 
@@ -531,19 +515,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
                 if (ret < 0) {
                     av_log(os->ctx, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
                 }
-
-                // Also output our custom timecode subtitle playlist
-                if (as->media_type == AVMEDIA_TYPE_VIDEO) {
-                    char timecode_vtt_file[1024];
-                    // TODO: Use same file previously generated for writing VTT to, e.g: including our timestamp subdirectory
-                    snprintf(timecode_vtt_file, sizeof(timecode_vtt_file), "timecode-%05d.vtt", i + 1);
-                    ff_hls_write_file_entry(c->timecode_out, 0, c->single_file,
-                                            duration, 0,
-                                            seg->range_length, seg->start_pos, NULL,
-                                            timecode_vtt_file,
-                                            NULL);
-                    av_log(s, AV_LOG_INFO, "%s -> %s\n", timecode_file, timecode_vtt_file);
-                }
             }
             prog_date_time += duration;
         }
@@ -552,14 +523,6 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
             ff_hls_write_end_list(c->m3u8_out);
 
         dashenc_io_close(s, &c->m3u8_out, temp_filename_hls);
-
-        // Also output our custom timecode subtitle playlist
-        if (as->media_type == AVMEDIA_TYPE_VIDEO) {
-            if (final)
-                ff_hls_write_end_list(c->timecode_out);
-
-            dashenc_io_close(s, &c->timecode_out, timecode_file);
-        }
 
         if (use_rename)
             if (avpriv_io_move(temp_filename_hls, filename_hls) < 0) {
@@ -695,7 +658,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
             avio_printf(out, "\t\t\t\t<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"%d\" />\n",
                 s->streams[i]->codecpar->channels);
         }
-        output_segment_list(os, out, s, i, final, target_duration, as);
+        output_segment_list(os, out, s, i, final, target_duration);
         avio_printf(out, "\t\t\t</Representation>\n");
     }
     avio_printf(out, "\t\t</AdaptationSet>\n");
@@ -1007,9 +970,6 @@ static int write_manifest(AVFormatContext *s, int final)
                                       os->muxer_overhead, max_audio_bitrate);
             is_default = 0;
         }
-
-        // Add our custom timecode subtitle reference
-        avio_printf(out, "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"timecode\",NAME=\"Timecode\",URI=\"timecode.m3u8\"\n");
 
         for (i = 0; i < s->nb_streams; i++) {
             char playlist_file[64];
@@ -1590,10 +1550,6 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (ret < 0)
             return ret;
         av_dict_free(&opts);
-
-        // TODO: Write timecode subtitle file, e.g: http://.../1234567890/timecode-00001.vtt
-        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-            av_log(s, AV_LOG_INFO, "TODO: Write timecode subtitle file next to: %s\n", os->temp_path);
     }
 
     //write out the data immediately in streaming mode
