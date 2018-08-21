@@ -940,7 +940,7 @@ static int write_manifest(AVFormatContext *s, int final)
         char codec_attr[128] = "";
 
         if (*c->dirname)
-            snprintf(filename_hls, sizeof(filename_hls), "%s/master.m3u8", c->dirname);
+            snprintf(filename_hls, sizeof(filename_hls), "%smaster.m3u8", c->dirname);
         else
             snprintf(filename_hls, sizeof(filename_hls), "master.m3u8");
 
