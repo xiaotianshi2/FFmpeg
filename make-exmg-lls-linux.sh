@@ -6,4 +6,4 @@
 make -j4
 
 cp ffmpeg ../playtrivia-video-tests/ffmpeg-exmg-lls-linux
-cp ffmpeg ~/go/src/bitbucket.org/exmachina/video-encoder/cmd/encoder-gui/ffmpeg-exmg-lls-linux
+cp ffmpeg ~/go/src/bitbucket.org/exmachina/video-encoder/assets/ffmpeg-exmg-lls-linux
