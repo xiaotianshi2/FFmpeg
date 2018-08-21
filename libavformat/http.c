@@ -1626,9 +1626,10 @@ static int http_shutdown(URLContext *h, int flags)
         if (!(flags & AVIO_FLAG_READ)) {
             char buf[1024];
             int read_ret;
-            s->hd->flags |= AVIO_FLAG_NONBLOCK;
+            //s->hd->flags |= AVIO_FLAG_NONBLOCK;
             read_ret = ffurl_read(s->hd, buf, sizeof(buf));
-            s->hd->flags &= ~AVIO_FLAG_NONBLOCK;
+            av_log(h, AV_LOG_VERBOSE, "%s response: [\n%s\n]\n", s->location, buf);
+            //s->hd->flags &= ~AVIO_FLAG_NONBLOCK;
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN)) {
                 av_log(h, AV_LOG_ERROR, "URL read error:  %d\n", read_ret);
                 ret = read_ret;
