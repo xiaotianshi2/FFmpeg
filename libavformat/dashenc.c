@@ -93,6 +93,11 @@ typedef struct OutputStream {
     double availability_time_offset;
     int total_pkt_size;
     int muxer_overhead;
+    // HLS latency hack - Also work with next segment
+    AVIOContext *next_out;
+    char next_filename[1024];
+    char next_full_path[1024];
+    char next_temp_path[1024];
 } OutputStream;
 
 typedef struct DASHContext {
@@ -164,9 +169,11 @@ static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
     int http_base_proto = filename ? ff_is_http_proto(filename) : 0;
     int err = AVERROR_MUXER_NOT_FOUND;
     if (!*pb || !http_base_proto || !c->http_persistent) {
+        // av_log(s, AV_LOG_INFO, "open: %s\n", filename);
         err = s->io_open(s, pb, filename, AVIO_FLAG_WRITE, options);
 #if CONFIG_HTTP_PROTOCOL
     } else {
+        // av_log(s, AV_LOG_INFO, "open: %s (persistent)\n", filename);
         URLContext *http_url_context = ffio_geturlcontext(*pb);
         av_assert0(http_url_context);
         err = ff_http_do_new_request(http_url_context, filename);
@@ -387,6 +394,8 @@ static void dash_free(AVFormatContext *s)
         for (j = 0; j < os->nb_segments; j++)
             av_free(os->segments[j]);
         av_free(os->segments);
+        // HLS latency hack - Close next segment output as well
+        ff_format_io_close(s, &os->next_out);
     }
     av_freep(&c->streams);
 
@@ -517,6 +526,15 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
                 }
             }
             prog_date_time += duration;
+
+            // HLS latency hack - Also include next upcoming segment reference in playlist
+            if (i == os->nb_segments - 1 && !c->single_file && !final) {
+                ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
+                                        duration, 0,
+                                        seg->range_length, seg->start_pos, NULL,
+                                        os->next_filename,
+                                        &prog_date_time);
+            }
         }
 
         if (final)
@@ -1537,16 +1555,44 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         AVDictionary *opts = NULL;
         const char *proto = avio_find_protocol_name(s->url);
         int use_rename = proto && !strcmp(proto, "file");
-        os->filename[0] = os->full_path[0] = os->temp_path[0] = '\0';
-        ff_dash_fill_tmpl_params(os->filename, sizeof(os->filename),
-                                 c->media_seg_name, pkt->stream_index,
-                                 os->segment_index, os->bit_rate, os->start_pts);
-        snprintf(os->full_path, sizeof(os->full_path), "%s%s", c->dirname,
-                 os->filename);
-        snprintf(os->temp_path, sizeof(os->temp_path),
-                 use_rename ? "%s.tmp" : "%s", os->full_path);
         set_http_options(&opts, c);
-        ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
+        // HLS latency hack - Also open (start writing) next segment
+        os->filename[0] = os->full_path[0] = os->temp_path[0] = '\0';
+        // Initialize first segment
+        if (os->segment_index == 1) {
+            ff_dash_fill_tmpl_params(os->filename, sizeof(os->filename),
+                                    c->media_seg_name, pkt->stream_index,
+                                    os->segment_index, os->bit_rate, os->start_pts);
+            snprintf(os->full_path, sizeof(os->full_path), "%s%s", c->dirname,
+                    os->filename);
+            snprintf(os->temp_path, sizeof(os->temp_path),
+                    use_rename ? "%s.tmp" : "%s", os->full_path);
+            ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
+            if (ret < 0)
+                return ret;
+        }
+        // Swap between current (finished) and upcoming outputstreams
+        if (os->segment_index > 1) {
+            AVIOContext *tmp_out;
+            tmp_out = os->out;
+            os->out = os->next_out;
+            os->next_out = tmp_out;
+            strcpy(os->filename, os->next_filename);
+            strcpy(os->full_path, os->next_full_path);
+            strcpy(os->temp_path, os->next_temp_path);
+        }
+        // Initialize upcoming segment
+        // Note: Estimate of next segment start time can prove to be incorrect in unstable conditions (e.g: OS X audio)
+        os->next_filename[0] = os->next_full_path[0] = os->next_temp_path[0] = '\0';
+        ff_dash_fill_tmpl_params(os->next_filename, sizeof(os->next_filename),
+                                 c->media_seg_name, pkt->stream_index,
+                                 os->segment_index + 1, os->bit_rate,
+                                 os->start_pts + (pkt->duration * os->ctx->streams[0]->time_base.den / 1000));
+        snprintf(os->next_full_path, sizeof(os->next_full_path), "%s%s", c->dirname,
+                 os->next_filename);
+        snprintf(os->next_temp_path, sizeof(os->next_temp_path),
+                 use_rename ? "%s.tmp" : "%s", os->next_full_path);
+        ret = dashenc_io_open(s, &os->next_out, os->next_temp_path, &opts);
         if (ret < 0)
             return ret;
         av_dict_free(&opts);
