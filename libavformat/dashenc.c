@@ -1570,6 +1570,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
             if (ret < 0)
                 return ret;
+            write_styp(os->out);
         }
         // Swap between current (finished) and upcoming outputstreams
         if (os->segment_index > 1) {
@@ -1596,14 +1597,17 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (ret < 0)
             return ret;
         av_dict_free(&opts);
+        write_styp(os->next_out);
     }
 
     //write out the data immediately in streaming mode
     if (c->streaming && c->segment_type == SEGMENT_TYPE_MP4) {
         int len = 0;
         uint8_t *buf = NULL;
-        if (!os->written_len)
-            write_styp(os->ctx->pb);
+        // HLS latency hack - styp can already be written during next segment initialization above
+        if (c->single_file || os->packets_written != 1)
+            if (!os->written_len)
+                write_styp(os->ctx->pb);
         avio_flush(os->ctx->pb);
         len = avio_get_dyn_buf (os->ctx->pb, &buf);
         avio_write(os->out, buf + os->written_len, len - os->written_len);
