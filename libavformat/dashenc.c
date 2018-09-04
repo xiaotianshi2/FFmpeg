@@ -1576,6 +1576,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             if (ret < 0)
                 return ret;
             write_styp(os->out);
+            avio_flush(os->out);
 
             os->next_filename[0] = os->next_full_path[0] = os->next_temp_path[0] = '\0';
             ff_dash_fill_tmpl_params(os->next_filename, sizeof(os->next_filename),
@@ -1590,6 +1591,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             if (ret < 0)
                 return ret;
             write_styp(os->next_out);
+            avio_flush(os->next_out);
 
         }
         // Swap between current (finished) and upcoming outputstreams
@@ -1622,6 +1624,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             return ret;
         av_dict_free(&opts);
         write_styp(os->next2_out);
+        avio_flush(os->next2_out);
     }
 
     //write out the data immediately in streaming mode
