@@ -98,6 +98,10 @@ typedef struct OutputStream {
     char next_filename[1024];
     char next_full_path[1024];
     char next_temp_path[1024];
+    AVIOContext *next2_out;
+    char next2_filename[1024];
+    char next2_full_path[1024];
+    char next2_temp_path[1024];
 } OutputStream;
 
 typedef struct DASHContext {
@@ -396,6 +400,7 @@ static void dash_free(AVFormatContext *s)
         av_free(os->segments);
         // HLS latency hack - Close next segment output as well
         ff_format_io_close(s, &os->next_out);
+        ff_format_io_close(s, &os->next2_out);
     }
     av_freep(&c->streams);
 
@@ -1571,33 +1576,52 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             if (ret < 0)
                 return ret;
             write_styp(os->out);
+
+            os->next_filename[0] = os->next_full_path[0] = os->next_temp_path[0] = '\0';
+            ff_dash_fill_tmpl_params(os->next_filename, sizeof(os->next_filename),
+                                    c->media_seg_name, pkt->stream_index,
+                                    os->segment_index + 1, os->bit_rate,
+                                    os->start_pts + (pkt->duration * os->ctx->streams[0]->time_base.den / 1000));
+            snprintf(os->next_full_path, sizeof(os->next_full_path), "%s%s", c->dirname,
+                    os->next_filename);
+            snprintf(os->next_temp_path, sizeof(os->next_temp_path),
+                    use_rename ? "%s.tmp" : "%s", os->next_full_path);
+            ret = dashenc_io_open(s, &os->next_out, os->next_temp_path, &opts);
+            if (ret < 0)
+                return ret;
+            write_styp(os->next_out);
+
         }
         // Swap between current (finished) and upcoming outputstreams
         if (os->segment_index > 1) {
             AVIOContext *tmp_out;
             tmp_out = os->out;
             os->out = os->next_out;
-            os->next_out = tmp_out;
+            os->next_out = os->next2_out;
+            os->next2_out = tmp_out;
+            strcpy(os->next_filename, os->next2_filename);
+            strcpy(os->next_full_path, os->next2_full_path);
+            strcpy(os->next_temp_path, os->next2_temp_path);
             strcpy(os->filename, os->next_filename);
             strcpy(os->full_path, os->next_full_path);
             strcpy(os->temp_path, os->next_temp_path);
         }
         // Initialize upcoming segment
         // Note: Estimate of next segment start time can prove to be incorrect in unstable conditions (e.g: OS X audio)
-        os->next_filename[0] = os->next_full_path[0] = os->next_temp_path[0] = '\0';
-        ff_dash_fill_tmpl_params(os->next_filename, sizeof(os->next_filename),
+        os->next2_filename[0] = os->next2_full_path[0] = os->next2_temp_path[0] = '\0';
+        ff_dash_fill_tmpl_params(os->next2_filename, sizeof(os->next2_filename),
                                  c->media_seg_name, pkt->stream_index,
-                                 os->segment_index + 1, os->bit_rate,
-                                 os->start_pts + (pkt->duration * os->ctx->streams[0]->time_base.den / 1000));
-        snprintf(os->next_full_path, sizeof(os->next_full_path), "%s%s", c->dirname,
-                 os->next_filename);
-        snprintf(os->next_temp_path, sizeof(os->next_temp_path),
-                 use_rename ? "%s.tmp" : "%s", os->next_full_path);
-        ret = dashenc_io_open(s, &os->next_out, os->next_temp_path, &opts);
+                                 os->segment_index + 2, os->bit_rate,
+                                 os->start_pts + (2 *(pkt->duration * os->ctx->streams[0]->time_base.den / 1000)));
+        snprintf(os->next2_full_path, sizeof(os->next2_full_path), "%s%s", c->dirname,
+                 os->next2_filename);
+        snprintf(os->next2_temp_path, sizeof(os->next2_temp_path),
+                 use_rename ? "%s.tmp" : "%s", os->next2_full_path);
+        ret = dashenc_io_open(s, &os->next2_out, os->next2_temp_path, &opts);
         if (ret < 0)
             return ret;
         av_dict_free(&opts);
-        write_styp(os->next_out);
+        write_styp(os->next2_out);
     }
 
     //write out the data immediately in streaming mode
