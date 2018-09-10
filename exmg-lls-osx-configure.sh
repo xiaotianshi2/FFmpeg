@@ -11,10 +11,13 @@ set -e
 # $ brew install automake fdk-aac git lame libass libtool libvorbis libvpx opus sdl shtool texi2html theora wget x264 x265 xvid nasm
 #
 # I've reduced that to the following:
-# - nasm      For compilation
-# - x264      For MP4 encoding
+# - nasm          For compilation
+# - x264          For MP4 encoding
+# - freetype      For drawtext filter
+# - fontconfig    For drawtext filter
+# - pkg-config    For drawtext filter
 
-brew install nasm x264
+brew install nasm x264 freetype fontconfig pkg-config
 
 
 # Configure
@@ -28,5 +31,7 @@ brew install nasm x264
 # --enable-gpl --enable-libx264           For MP4 encoding
 # --pkg-config-flags=--static             To produce a static build which can be easily shared
 # --disable-ffplay                        To prevent needless building
+# --enable-libfreetype                    For drawtext filter
+# --enable-fontconfig                     For drawtext filter
 
-./configure --cc=/usr/bin/clang --enable-gpl --enable-libx264 --pkg-config-flags=--static --disable-ffplay
+./configure --cc=/usr/bin/clang --enable-gpl --enable-libx264 --pkg-config-flags=--static --disable-ffplay --enable-libfreetype --enable-fontconfig
