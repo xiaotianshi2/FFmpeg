@@ -1604,12 +1604,12 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             os->out = os->next_out;
             os->next_out = os->next2_out;
             os->next2_out = tmp_out;
-            strcpy(os->next_filename, os->next2_filename);
-            strcpy(os->next_full_path, os->next2_full_path);
-            strcpy(os->next_temp_path, os->next2_temp_path);
             strcpy(os->filename, os->next_filename);
             strcpy(os->full_path, os->next_full_path);
             strcpy(os->temp_path, os->next_temp_path);
+            strcpy(os->next_filename, os->next2_filename);
+            strcpy(os->next_full_path, os->next2_full_path);
+            strcpy(os->next_temp_path, os->next2_temp_path);
         }
         // Initialize upcoming segment
         // Note: Estimate of next segment start time can prove to be incorrect in unstable conditions (e.g: OS X audio)
