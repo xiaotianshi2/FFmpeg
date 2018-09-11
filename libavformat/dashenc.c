@@ -1560,7 +1560,6 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         AVDictionary *opts = NULL;
         const char *proto = avio_find_protocol_name(s->url);
         int use_rename = proto && !strcmp(proto, "file");
-        set_http_options(&opts, c);
         // HLS latency hack - Also open (start writing) next segment
         os->filename[0] = os->full_path[0] = os->temp_path[0] = '\0';
         // Initialize first segment
@@ -1572,7 +1571,9 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
                     os->filename);
             snprintf(os->temp_path, sizeof(os->temp_path),
                     use_rename ? "%s.tmp" : "%s", os->full_path);
+            set_http_options(&opts, c);
             ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
+            av_dict_free(&opts);
             if (ret < 0)
                 return ret;
             write_styp(os->out);
@@ -1587,7 +1588,9 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
                     os->next_filename);
             snprintf(os->next_temp_path, sizeof(os->next_temp_path),
                     use_rename ? "%s.tmp" : "%s", os->next_full_path);
+            set_http_options(&opts, c);
             ret = dashenc_io_open(s, &os->next_out, os->next_temp_path, &opts);
+            av_dict_free(&opts);
             if (ret < 0)
                 return ret;
             write_styp(os->next_out);
@@ -1619,10 +1622,11 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
                  os->next2_filename);
         snprintf(os->next2_temp_path, sizeof(os->next2_temp_path),
                  use_rename ? "%s.tmp" : "%s", os->next2_full_path);
+        set_http_options(&opts, c);
         ret = dashenc_io_open(s, &os->next2_out, os->next2_temp_path, &opts);
+        av_dict_free(&opts);
         if (ret < 0)
             return ret;
-        av_dict_free(&opts);
         write_styp(os->next2_out);
         avio_flush(os->next2_out);
     }
