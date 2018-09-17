@@ -981,6 +981,9 @@ static int write_manifest(AVFormatContext *s, int final)
 
         ff_hls_write_playlist_version(out, 7);
 
+        // CMAF segments are independent
+        avio_printf(out, "#EXT-X-INDEPENDENT-SEGMENTS\n");
+
         for (i = 0; i < s->nb_streams; i++) {
             char playlist_file[64];
             AVStream *st = s->streams[i];
