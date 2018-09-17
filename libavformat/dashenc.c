@@ -532,14 +532,19 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
             }
             prog_date_time += duration;
 
-            // HLS latency hack - Also include next upcoming segment reference in playlist
+            // HLS latency hack - Also include two upcoming segment references in playlist
             // Note: size and pos (seg->range_length and seg->start_pos) are only used in single file mode
-            // TODO: Experiment with referencing another upcoming segment (for a total of two)
             if (i == os->nb_segments - 1 && !c->single_file && !final) {
                 ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
                                         duration, 0,
                                         0, 0, NULL,
                                         os->next_filename,
+                                        &prog_date_time);
+                prog_date_time += duration;
+                ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
+                                        duration, 0,
+                                        0, 0, NULL,
+                                        os->next2_filename,
                                         &prog_date_time);
             }
         }
