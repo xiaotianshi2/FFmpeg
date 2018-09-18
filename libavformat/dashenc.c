@@ -93,7 +93,7 @@ typedef struct OutputStream {
     double availability_time_offset;
     int total_pkt_size;
     int muxer_overhead;
-    // HLS latency hack - Also work with next segment
+    // HLS latency hack - Also work with next segments
     AVIOContext *next_out;
     char next_filename[1024];
     char next_full_path[1024];
@@ -1047,6 +1047,9 @@ static int dash_init(AVFormatContext *s)
     int ret = 0, i;
     char *ptr;
     char basename[1024];
+
+    // HLS latency hack - Compensate for two extra upcoming segments we add to the list above
+    c->window_size -= 2;
 
     if (c->single_file_name)
         c->single_file = 1;
