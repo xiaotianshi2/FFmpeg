@@ -1049,6 +1049,8 @@ static int dash_init(AVFormatContext *s)
     char basename[1024];
 
     // HLS latency hack - Compensate for two extra upcoming segments we add to the list above
+    // TODO: Check if this isn't breaking things; think it might break DASH
+    // Probably better to only compensate in HLS places where this is used
     c->window_size -= 2;
 
     if (c->single_file_name)
