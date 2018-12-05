@@ -686,6 +686,34 @@ static void close_all_output_streams(OutputStream *ost, OSTFinished this_stream,
     }
 }
 
+
+/**
+ * Add a string value to the side data of a packet.
+ */
+static void addSideDataS(AVPacket *pkt, const char *key, const char *value)
+{
+    AVDictionary * frameDict = NULL;
+    av_dict_set(&frameDict, key, value, 0);
+
+    int frameDictSize = 0;
+    uint8_t *frameDictData = av_packet_pack_dictionary(frameDict, &frameDictSize);
+
+    av_dict_free(&frameDict);
+
+    av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, frameDictData, frameDictSize);
+}
+
+/**
+ * Add a int64_t value as a string in the side data of a packet.
+ */
+static void addSideDataL(AVPacket *pkt, const char *key, int64_t value)
+{
+    char strValue[19]; //19 = max characters for 64bit int
+    sprintf(strValue, "%"PRId64"", value);
+
+    addSideDataS(pkt, key, strValue);
+}
+
 static void write_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost, int unqueue)
 {
     AVFormatContext *s = of->ctx;
@@ -1312,6 +1340,11 @@ static void do_video_out(OutputFile *of,
                 pkt.pts = ost->sync_opts;
 
             av_packet_rescale_ts(&pkt, enc->time_base, ost->mux_timebase);
+
+            // LLS-79 Store time data retrieved from frame side_data in packet side_data
+            AVDictionaryEntry *timeEntry = av_dict_get(in_picture->metadata, "init_time", NULL, 0);
+            if (timeEntry)
+                addSideDataS(&pkt, "init_time", timeEntry->value);
 
             if (debug_ts) {
                 av_log(NULL, AV_LOG_INFO, "encoder -> type:video "
@@ -4501,6 +4534,9 @@ static int process_input(int file_index)
     }
 
     sub2video_heartbeat(ist, pkt.pts);
+
+    // LLS-79 Store current time in packet side_data
+    addSideDataL(&pkt, "init_time", av_gettime_relative());
 
     process_input_packet(ist, &pkt, 0);
 

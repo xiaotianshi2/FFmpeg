@@ -33,6 +33,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/rational.h"
 #include "libavutil/time_internal.h"
+#include "libavutil/time.h"
 
 #include "avc.h"
 #include "avformat.h"
@@ -1439,7 +1440,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     OutputStream *os = &c->streams[pkt->stream_index];
     int64_t seg_end_duration, elapsed_duration;
     int ret;
-
+    
     ret = update_stream_extradata(s, os, st->codecpar, &st->avg_frame_rate);
     if (ret < 0)
         return ret;
@@ -1554,6 +1555,29 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     //write out the data immediately in streaming mode
     if (c->streaming && c->segment_type == SEGMENT_TYPE_MP4) {
+        // LLS-79 Print statistics
+        int size;
+        const uint8_t *side_data;
+
+        side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &size);
+        if (side_data && size) {
+            AVDictionary *dict = NULL;
+            if (av_packet_unpack_dictionary(side_data, size, &dict) >= 0) {
+                AVDictionaryEntry* timeEntry = av_dict_get(dict, "init_time", NULL, 0);
+                if (timeEntry) {
+                    int64_t pkt_init_time = strtol(timeEntry->value, NULL, 10);
+                    //av_gettime_relative is in microseconds
+                    int64_t curr_time = av_gettime_relative();
+                    int64_t duration = (curr_time - pkt_init_time) / 1000;
+                    av_log(NULL, AV_LOG_INFO, "Processing time (ms): %"PRId64", time: %"PRId64"\n", duration, curr_time);
+                }
+            }
+                
+            av_dict_free(&dict);
+        }
+        // End of statistics
+
+
         int len = 0;
         uint8_t *buf = NULL;
         if (!os->written_len)
