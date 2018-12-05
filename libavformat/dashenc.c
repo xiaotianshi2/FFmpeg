@@ -159,6 +159,13 @@ static struct format_string {
     { 0, NULL }
 };
 
+// Packet/frame statistics
+static int64_t lastLog;
+static int64_t maxTime;
+static int64_t minTime;
+static int64_t totalTime;
+static int64_t nrOfSamples;
+
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
                            AVDictionary **options) {
     DASHContext *c = s->priv_data;
@@ -1433,6 +1440,56 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     return ret;
 }
 
+/**
+ * Print statistics to the log.
+ * LLS-79
+ */
+static void print_stats(AVPacket *pkt) 
+{
+    int size;
+    const uint8_t *side_data;
+    const logInterval = 5 * 1000000;
+
+    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &size);
+    if (side_data && size) {
+        AVDictionary *dict = NULL;
+        if (av_packet_unpack_dictionary(side_data, size, &dict) >= 0) {
+            AVDictionaryEntry* timeEntry = av_dict_get(dict, "init_time", NULL, 0);
+            if (timeEntry) {
+                int64_t pkt_init_time = strtol(timeEntry->value, NULL, 10);
+                //av_gettime_relative is in microseconds
+                int64_t curr_time = av_gettime_relative();
+                int64_t pTime = (curr_time - pkt_init_time) / 1000;
+
+                nrOfSamples++;
+                totalTime += pTime;
+                if (maxTime < pTime)
+                    maxTime = pTime;
+                
+                if (minTime > pTime || minTime == 0)
+                    minTime = pTime;
+
+                if (lastLog == 0)
+                    lastLog = curr_time;
+
+                if (curr_time - lastLog > logInterval) {
+                    lastLog = curr_time;
+                    int64_t avgTime = totalTime / nrOfSamples;
+
+                    av_log(NULL, AV_LOG_INFO, "Processing time (ms) min: %"PRId64", max: %"PRId64", avg: %"PRId64", time: %"PRId64"\n", minTime, maxTime, avgTime, curr_time);
+                    
+                    minTime = 0;
+                    maxTime = 0;
+                    totalTime = 0;
+                    nrOfSamples = 0;
+                }
+            }
+        }
+            
+        av_dict_free(&dict);
+    }
+}
+
 static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
 {
     DASHContext *c = s->priv_data;
@@ -1555,27 +1612,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     //write out the data immediately in streaming mode
     if (c->streaming && c->segment_type == SEGMENT_TYPE_MP4) {
-        // LLS-79 Print statistics
-        int size;
-        const uint8_t *side_data;
-
-        side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &size);
-        if (side_data && size) {
-            AVDictionary *dict = NULL;
-            if (av_packet_unpack_dictionary(side_data, size, &dict) >= 0) {
-                AVDictionaryEntry* timeEntry = av_dict_get(dict, "init_time", NULL, 0);
-                if (timeEntry) {
-                    int64_t pkt_init_time = strtol(timeEntry->value, NULL, 10);
-                    //av_gettime_relative is in microseconds
-                    int64_t curr_time = av_gettime_relative();
-                    int64_t duration = (curr_time - pkt_init_time) / 1000;
-                    av_log(NULL, AV_LOG_INFO, "Processing time (ms): %"PRId64", time: %"PRId64"\n", duration, curr_time);
-                }
-            }
-                
-            av_dict_free(&dict);
-        }
-        // End of statistics
+        print_stats(pkt);
 
 
         int len = 0;
