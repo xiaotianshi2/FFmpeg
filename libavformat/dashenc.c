@@ -1571,7 +1571,7 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
  * Print statistics to the log.
  * LLS-79
  */
-static void print_stats(AVPacket *pkt) 
+static void print_stats(AVPacket *pkt)
 {
     int size;
     const uint8_t *side_data;
@@ -1592,7 +1592,7 @@ static void print_stats(AVPacket *pkt)
                 totalTime += pTime;
                 if (maxTime < pTime)
                     maxTime = pTime;
-                
+
                 if (minTime > pTime || minTime == 0)
                     minTime = pTime;
 
@@ -1604,7 +1604,7 @@ static void print_stats(AVPacket *pkt)
                     int64_t avgTime = totalTime / nrOfSamples;
 
                     av_log(NULL, AV_LOG_INFO, "Processing time (ms) min: %"PRId64", max: %"PRId64", avg: %"PRId64", time: %"PRId64"\n", minTime, maxTime, avgTime, curr_time);
-                    
+
                     minTime = 0;
                     maxTime = 0;
                     totalTime = 0;
@@ -1612,7 +1612,7 @@ static void print_stats(AVPacket *pkt)
                 }
             }
         }
-            
+
         av_dict_free(&dict);
     }
 }
