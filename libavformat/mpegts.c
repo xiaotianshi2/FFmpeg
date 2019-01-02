@@ -918,7 +918,7 @@ static void new_data_packet(const uint8_t *buffer, int len, AVPacket *pkt)
 
 static int new_pes_packet(PESContext *pes, AVPacket *pkt)
 {
-    char *sd;
+    uint8_t *sd;
 
     av_init_packet(pkt);
 
@@ -1219,6 +1219,7 @@ skip:
                         || pes->st->codecpar->codec_id == AV_CODEC_ID_DVB_SUBTITLE)
                     ) {
                     AVProgram *p = NULL;
+                    int pcr_found = 0;
                     while ((p = av_find_program_from_stream(pes->stream, p, pes->st->index))) {
                         if (p->pcr_pid != -1 && p->discard != AVDISCARD_ALL) {
                             MpegTSFilter *f = pes->ts->pids[p->pcr_pid];
@@ -1242,6 +1243,7 @@ skip:
                                     // and the pcr error to this packet should be no more than 100 ms.
                                     // TODO: we should interpolate the PCR, not just use the last one
                                     int64_t pcr = f->last_pcr / 300;
+                                    pcr_found = 1;
                                     pes->st->pts_wrap_reference = st->pts_wrap_reference;
                                     pes->st->pts_wrap_behavior = st->pts_wrap_behavior;
                                     if (pes->dts == AV_NOPTS_VALUE || pes->dts < pcr) {
@@ -1257,6 +1259,15 @@ skip:
                                 }
                             }
                         }
+                    }
+
+                    if (!pcr_found) {
+                        av_log(pes->stream, AV_LOG_VERBOSE,
+                               "Forcing DTS/PTS to be unset for a "
+                               "non-trustworthy PES packet for PID %d as "
+                               "PCR hasn't been received yet.\n",
+                               pes->pid);
+                        pes->dts = pes->pts = AV_NOPTS_VALUE;
                     }
                 }
             }
@@ -1983,7 +1994,7 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
                 int service_type = ((component_type & service_type_mask) >> 3);
                 if (service_type == 0x02 /* 0b010 */) {
                     st->disposition |= AV_DISPOSITION_DESCRIPTIONS;
-                    av_log(ts->stream, AV_LOG_DEBUG, "New track disposition for id %u: %u\n", st->id, st->disposition);
+                    av_log(ts ? ts->stream : fc, AV_LOG_DEBUG, "New track disposition for id %u: %u\n", st->id, st->disposition);
                 }
             }
         }
@@ -1997,7 +2008,7 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
                 int service_type = ((component_type & service_type_mask) >> 3);
                 if (service_type == 0x02 /* 0b010 */) {
                     st->disposition |= AV_DISPOSITION_DESCRIPTIONS;
-                    av_log(ts->stream, AV_LOG_DEBUG, "New track disposition for id %u: %u\n", st->id, st->disposition);
+                    av_log(ts ? ts->stream : fc, AV_LOG_DEBUG, "New track disposition for id %u: %u\n", st->id, st->disposition);
                 }
             }
         }
