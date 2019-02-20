@@ -430,13 +430,12 @@ static void get_start_index_number(OutputStream *os, DASHContext *c,
 
 static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
                                      int representation_id, int final,
-                                     char *prefetch_url) {
+                                     char *prefetch_url, int target_duration) {
     DASHContext *c = s->priv_data;
     int timescale = os->ctx->streams[0]->time_base.den;
     char temp_filename_hls[1024];
     char filename_hls[1024];
     AVDictionary *http_opts = NULL;
-    int target_duration = 0;
     int ret = 0;
     const char *proto = avio_find_protocol_name(c->dirname);
     int use_rename = proto && !strcmp(proto, "file");
@@ -631,7 +630,7 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
         avio_printf(out, "\t\t\t\t</SegmentList>\n");
     }
     if (!c->lhls || final) {
-        write_hls_media_playlist(os, s, representation_id, final, NULL);
+        write_hls_media_playlist(os, s, representation_id, final, NULL, target_duration);
     }
 
 }
@@ -1754,7 +1753,8 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         }
         if (c->lhls) {
             char *prefetch_url = use_rename ? NULL : os->filename;
-            write_hls_media_playlist(os, s, pkt->stream_index, 0, prefetch_url);
+            //TODO: this uses a wrong target_duration
+            write_hls_media_playlist(os, s, pkt->stream_index, 0, prefetch_url, 0);
         }
     }
 
