@@ -45,9 +45,9 @@ static av_cold int davs2_init(AVCodecContext *avctx)
     /* init the decoder */
     cad->param.threads      = avctx->thread_count;
     cad->param.info_level   = 0;
-    cad->decoder            = davs2_decoder_open(&cad->param);
     cad->param.disable_avx  = !(cpu_flags & AV_CPU_FLAG_AVX &&
                                 cpu_flags & AV_CPU_FLAG_AVX2);
+    cad->decoder            = davs2_decoder_open(&cad->param);
 
     if (!cad->decoder) {
         av_log(avctx, AV_LOG_ERROR, "decoder created error.");
@@ -83,23 +83,23 @@ static int davs2_dump_frames(AVCodecContext *avctx, davs2_picture_t *pic, int *g
     }
 
     switch (pic->type) {
-        case DAVS2_PIC_I:
-        case DAVS2_PIC_G:
-            frame->pict_type = AV_PICTURE_TYPE_I;
-            break;
-        case DAVS2_PIC_P:
-        case DAVS2_PIC_S:
-            frame->pict_type = AV_PICTURE_TYPE_P;
-            break;
-        case DAVS2_PIC_B:
-            frame->pict_type = AV_PICTURE_TYPE_B;
-            break;
-        case DAVS2_PIC_F:
-            frame->pict_type = AV_PICTURE_TYPE_S;
-            break;
-        default:
-            av_log(avctx, AV_LOG_ERROR, "Decoder error: unknown frame type\n");
-            return AVERROR_EXTERNAL;
+    case DAVS2_PIC_I:
+    case DAVS2_PIC_G:
+        frame->pict_type = AV_PICTURE_TYPE_I;
+        break;
+    case DAVS2_PIC_P:
+    case DAVS2_PIC_S:
+        frame->pict_type = AV_PICTURE_TYPE_P;
+        break;
+    case DAVS2_PIC_B:
+        frame->pict_type = AV_PICTURE_TYPE_B;
+        break;
+    case DAVS2_PIC_F:
+        frame->pict_type = AV_PICTURE_TYPE_S;
+        break;
+    default:
+        av_log(avctx, AV_LOG_ERROR, "Decoder error: unknown frame type\n");
+        return AVERROR_EXTERNAL;
     }
 
     for (plane = 0; plane < 3; ++plane) {
