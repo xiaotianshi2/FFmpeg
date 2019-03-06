@@ -476,7 +476,7 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
     ff_hls_write_init_file(c->m3u8_out, os->initfile, c->single_file,
                            os->init_range_length, os->init_start_pos);
 
-    for (i = 0; i < os->nb_segments; i++) {
+    for (i = start_index; i < os->nb_segments; i++) {
         Segment *seg = os->segments[i];
 
         if (prog_date_time == 0) {
