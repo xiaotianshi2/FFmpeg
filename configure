@@ -321,7 +321,7 @@ External library support:
   The following libraries provide various hardware acceleration features:
   --disable-amf            disable AMF video encoding code [autodetect]
   --disable-audiotoolbox   disable Apple AudioToolbox code [autodetect]
-  --enable-cuda-sdk        enable CUDA features that require the CUDA SDK [no]
+  --enable-cuda-nvcc       enable Nvidia CUDA compiler [no]
   --disable-cuvid          disable Nvidia CUVID support [autodetect]
   --disable-d3d11va        disable Microsoft Direct3D 11 video acceleration code [autodetect]
   --disable-dxva2          disable Microsoft DirectX 9 video acceleration code [autodetect]
@@ -1001,6 +1001,10 @@ hostcc_o(){
     eval printf '%s\\n' $HOSTCC_O
 }
 
+nvcc_o(){
+    eval printf '%s\\n' $NVCC_O
+}
+
 test_cc(){
     log test_cc "$@"
     cat > $TMPC
@@ -1020,6 +1024,25 @@ test_objcc(){
     cat > $TMPM
     log_file $TMPM
     test_cmd $objcc -Werror=missing-prototypes $CPPFLAGS $CFLAGS $OBJCFLAGS "$@" $OBJCC_C $(cc_o $TMPO) $TMPM
+}
+
+test_nvcc(){
+    log test_nvcc "$@"
+    cat > $TMPCU
+    log_file $TMPCU
+    tmpcu_=$TMPCU
+    tmpo_=$TMPO
+    [ -x "$(command -v cygpath)" ] && tmpcu_=$(cygpath -m $tmpcu_) && tmpo_=$(cygpath -m $tmpo_)
+    test_cmd $nvcc -ptx $NVCCFLAGS "$@" $NVCC_C $(nvcc_o $tmpo_) $tmpcu_
+}
+
+check_nvcc() {
+    log check_nvcc "$@"
+    test_nvcc <<EOF
+extern "C" {
+    __global__ void hello(unsigned char *data) {}
+}
+EOF
 }
 
 test_cpp(){
@@ -1806,6 +1829,7 @@ EXTRALIBS_LIST="
 "
 
 HWACCEL_LIBRARY_NONFREE_LIST="
+    cuda_nvcc
     cuda_sdk
     libnpp
 "
@@ -2953,8 +2977,8 @@ v4l2_m2m_deps="linux_videodev2_h sem_timedwait"
 
 hwupload_cuda_filter_deps="ffnvcodec"
 scale_npp_filter_deps="ffnvcodec libnpp"
-scale_cuda_filter_deps="cuda_sdk"
-thumbnail_cuda_filter_deps="cuda_sdk"
+scale_cuda_filter_deps="ffnvcodec cuda_nvcc"
+thumbnail_cuda_filter_deps="ffnvcodec cuda_nvcc"
 transpose_npp_filter_deps="ffnvcodec libnpp"
 
 amf_deps_any="libdl LoadLibrary"
@@ -3513,7 +3537,7 @@ zscale_filter_deps="libzimg const_nan"
 scale_vaapi_filter_deps="vaapi"
 vpp_qsv_filter_deps="libmfx"
 vpp_qsv_filter_select="qsvvpp"
-yadif_cuda_filter_deps="cuda_sdk"
+yadif_cuda_filter_deps="ffnvcodec cuda_nvcc"
 
 # examples
 avio_dir_cmd_deps="avformat avutil"
@@ -3571,8 +3595,8 @@ avutil_extralibs="d3d11va_extralibs nanosleep_extralibs pthreads_extralibs vaapi
 # programs
 ffmpeg_deps="avcodec avfilter avformat"
 ffmpeg_select="aformat_filter anull_filter atrim_filter format_filter
-               null_filter
-               trim_filter"
+               hflip_filter null_filter
+               transpose_filter trim_filter vflip_filter"
 ffmpeg_suggest="ole32 psapi shell32"
 ffplay_deps="avcodec avformat swscale swresample sdl2"
 ffplay_select="rdft crop_filter transpose_filter hflip_filter vflip_filter rotate_filter"
@@ -4238,6 +4262,7 @@ tmpfile TMPCPP .cpp
 tmpfile TMPE   $EXESUF
 tmpfile TMPH   .h
 tmpfile TMPM   .m
+tmpfile TMPCU  .cu
 tmpfile TMPO   .o
 tmpfile TMPS   .S
 tmpfile TMPSH  .sh
@@ -6013,11 +6038,17 @@ check_type "va/va.h va/va_enc_vp9.h"  "VAEncPictureParameterBufferVP9"
 
 check_type "vdpau/vdpau.h" "VdpPictureInfoHEVC"
 
+if enabled cuda_sdk; then
+    warn "Option --enable-cuda-sdk is deprecated. Use --enable-cuda-nvcc instead."
+    enable cuda_nvcc
+fi
+
 if ! disabled ffnvcodec; then
-    check_pkg_config ffnvcodec "ffnvcodec >= 8.1.24.2" \
-          "ffnvcodec/nvEncodeAPI.h ffnvcodec/dynlink_cuda.h ffnvcodec/dynlink_cuviddec.h ffnvcodec/dynlink_nvcuvid.h" "" || \
-      check_pkg_config ffnvcodec "ffnvcodec >= 8.0.14.2 ffnvcodec < 8.1" \
-          "ffnvcodec/nvEncodeAPI.h ffnvcodec/dynlink_cuda.h ffnvcodec/dynlink_cuviddec.h ffnvcodec/dynlink_nvcuvid.h" ""
+    ffnv_hdr_list="ffnvcodec/nvEncodeAPI.h ffnvcodec/dynlink_cuda.h ffnvcodec/dynlink_cuviddec.h ffnvcodec/dynlink_nvcuvid.h"
+    check_pkg_config ffnvcodec "ffnvcodec >= 9.0.18.0" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 8.2.15.8 ffnvcodec < 8.3" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 8.1.24.9 ffnvcodec < 8.2" "$ffnv_hdr_list" "" || \
+      check_pkg_config ffnvcodec "ffnvcodec >= 8.0.14.9 ffnvcodec < 8.1" "$ffnv_hdr_list" ""
 fi
 
 check_cpp_condition winrt windows.h "!WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)"
@@ -6087,7 +6118,7 @@ for func in $COMPLEX_FUNCS; do
 done
 
 # these are off by default, so fail if requested and not available
-enabled cuda_sdk          && require cuda_sdk cuda.h cuCtxCreate -lcuda
+enabled cuda_nvcc         && { check_nvcc || die "ERROR: failed checking for nvcc."; }
 enabled chromaprint       && require chromaprint chromaprint.h chromaprint_get_version -lchromaprint
 enabled decklink          && { require_headers DeckLinkAPI.h &&
                                { test_cpp_condition DeckLinkAPIVersion.h "BLACKMAGIC_DECKLINK_API_VERSION >= 0x0a090500" || die "ERROR: Decklink API version must be >= 10.9.5."; } }
@@ -6195,21 +6226,19 @@ enabled libvorbis         && require_pkg_config libvorbis vorbis vorbis/codec.h 
 enabled libvpx            && {
     enabled libvpx_vp8_decoder && {
         check_pkg_config libvpx_vp8_decoder "vpx >= 1.4.0" "vpx/vpx_decoder.h vpx/vp8dx.h" vpx_codec_vp8_dx ||
-            check_lib libvpx_vp8_decoder "vpx/vpx_decoder.h vpx/vp8dx.h" "vpx_codec_dec_init_ver VPX_IMG_FMT_HIGHBITDEPTH" -lvpx ||
-                die "ERROR: libvpx decoder version must be >=1.4.0";
+            check_lib libvpx_vp8_decoder "vpx/vpx_decoder.h vpx/vp8dx.h" "vpx_codec_vp8_dx VPX_IMG_FMT_HIGHBITDEPTH" "-lvpx $libm_extralibs $pthreads_extralibs"
     }
     enabled libvpx_vp8_encoder && {
         check_pkg_config libvpx_vp8_encoder "vpx >= 1.4.0" "vpx/vpx_encoder.h vpx/vp8cx.h" vpx_codec_vp8_cx ||
-            check_lib libvpx_vp8_encoder "vpx/vpx_encoder.h vpx/vp8cx.h" "vpx_codec_enc_init_ver VPX_IMG_FMT_HIGHBITDEPTH" -lvpx ||
-                die "ERROR: libvpx encoder version must be >=1.4.0";
+            check_lib libvpx_vp8_encoder "vpx/vpx_encoder.h vpx/vp8cx.h" "vpx_codec_vp8_cx VPX_IMG_FMT_HIGHBITDEPTH" "-lvpx $libm_extralibs $pthreads_extralibs"
     }
     enabled libvpx_vp9_decoder && {
         check_pkg_config libvpx_vp9_decoder "vpx >= 1.4.0" "vpx/vpx_decoder.h vpx/vp8dx.h" vpx_codec_vp9_dx ||
-            check_lib libvpx_vp9_decoder "vpx/vpx_decoder.h vpx/vp8dx.h" "vpx_codec_vp9_dx VPX_IMG_FMT_HIGHBITDEPTH" "-lvpx $libm_extralibs"
+            check_lib libvpx_vp9_decoder "vpx/vpx_decoder.h vpx/vp8dx.h" "vpx_codec_vp9_dx VPX_IMG_FMT_HIGHBITDEPTH" "-lvpx $libm_extralibs $pthreads_extralibs"
     }
     enabled libvpx_vp9_encoder && {
         check_pkg_config libvpx_vp9_encoder "vpx >= 1.4.0" "vpx/vpx_encoder.h vpx/vp8cx.h" vpx_codec_vp9_cx ||
-            check_lib libvpx_vp9_encoder "vpx/vpx_encoder.h vpx/vp8cx.h" "vpx_codec_vp9_cx VPX_IMG_FMT_HIGHBITDEPTH" "-lvpx $libm_extralibs"
+            check_lib libvpx_vp9_encoder "vpx/vpx_encoder.h vpx/vp8cx.h" "vpx_codec_vp9_cx VPX_IMG_FMT_HIGHBITDEPTH" "-lvpx $libm_extralibs $pthreads_extralibs"
     }
     if disabled_all libvpx_vp8_decoder libvpx_vp9_decoder libvpx_vp8_encoder libvpx_vp9_encoder; then
         die "libvpx enabled but no supported decoders found"
