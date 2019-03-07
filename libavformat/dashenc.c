@@ -412,6 +412,14 @@ static void set_http_options(AVDictionary **options, DASHContext *c)
         av_dict_set_int(options, "timeout", c->timeout, 0);
 }
 
+static void get_hls_master_playlist_name(char *playlist_name, int string_size, const char *base_url) {
+      
+      if (*base_url)
+            snprintf(playlist_name, string_size, "%smaster.m3u8", base_url);
+        else
+            snprintf(playlist_name, string_size, "master.m3u8");
+}
+
 static void get_hls_playlist_name(char *playlist_name, int string_size,
                                   const char *base_url, int id) {
     if (base_url)
@@ -1007,15 +1015,7 @@ static int write_manifest(AVFormatContext *s, int final)
         int is_default = 1;
         int max_audio_bitrate = 0;
 
-        // Publish master playlist only the configured rate
-        if (c->master_playlist_created && (!c->master_publish_rate ||
-             c->streams[0].segment_index % c->master_publish_rate))
-            return 0;
-
-        if (*c->dirname)
-            snprintf(filename_hls, sizeof(filename_hls), "%smaster.m3u8", c->dirname);
-        else
-            snprintf(filename_hls, sizeof(filename_hls), "master.m3u8");
+        get_hls_master_playlist_name(filename_hls, sizeof(filename_hls), c->dirname);
 
         snprintf(temp_filename, sizeof(temp_filename), use_rename ? "%s.tmp" : "%s", filename_hls);
 
@@ -1839,6 +1839,18 @@ static int dash_write_trailer(AVFormatContext *s)
             }
             snprintf(filename, sizeof(filename), "%smaster.m3u8", c->dirname);
             dashenc_delete_file(s, filename);
+        }
+        dashenc_delete_file(s, &c->delete_out, s->url);
+
+        if(c->hls_playlist) {
+
+            get_hls_master_playlist_name(filename, sizeof(filename), c->dirname);
+            dashenc_delete_file(s, &c->delete_out, filename);
+            
+            for (i = 0; i < s->nb_streams; i++) {
+                get_hls_playlist_name(filename, sizeof(filename), c->dirname, i);
+                dashenc_delete_file(s, &c->delete_out, filename);
+            }
         }
     }
 
