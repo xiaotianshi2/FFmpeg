@@ -144,6 +144,8 @@ typedef struct DASHContext {
     int ignore_io_errors;
     int lhls;
     int master_publish_rate;
+    int nr_of_streams_to_flush;
+    int nr_of_streams_flushed;
 } DASHContext;
 
 static struct codec_string {
@@ -1108,6 +1110,8 @@ static int dash_init(AVFormatContext *s)
     if (c->single_file)
         c->use_template = 0;
 
+    c->nr_of_streams_to_flush = 0;
+
 #if FF_API_DASH_MIN_SEG_DURATION
     if (c->min_seg_duration != 5000000) {
         av_log(s, AV_LOG_WARNING, "The min_seg_duration option is deprecated and will be removed. Please use the -seg_duration\n");
@@ -1298,12 +1302,18 @@ static int dash_init(AVFormatContext *s)
         os->max_pts = AV_NOPTS_VALUE;
         os->last_dts = AV_NOPTS_VALUE;
         os->segment_index = 1;
+
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+            c->nr_of_streams_to_flush++;
     }
 
     if (!c->has_video && c->seg_duration <= 0) {
         av_log(s, AV_LOG_WARNING, "no video stream and no seg duration set\n");
         return AVERROR(EINVAL);
     }
+
+    c->nr_of_streams_flushed = 0;
+
     return 0;
 }
 
@@ -1589,8 +1599,14 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         }
     }
 
-    if (ret >= 0)
+    if (ret >= 0) {
+        c->nr_of_streams_flushed++;
+        if (c->nr_of_streams_flushed != c->nr_of_streams_to_flush)
+            return ret;
+
+        c->nr_of_streams_flushed = 0;
         ret = write_manifest(s, final);
+    }
     return ret;
 }
 
@@ -1700,6 +1716,8 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         seg_end_duration = c->seg_duration;
     }
 
+    //Skip flush if a video track is available and this is an audio track
+    //Audio tracks are flushed as soon as the first video track is flushed.
     if ((!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
         pkt->flags & AV_PKT_FLAG_KEY && os->packets_written &&
         av_compare_ts(elapsed_duration, st->time_base,
