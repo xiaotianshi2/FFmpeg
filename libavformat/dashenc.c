@@ -64,6 +64,7 @@ typedef struct Segment {
     int64_t time;
     double prog_date_time;
     int64_t duration;
+    int n;
 } Segment;
 
 typedef struct AdaptationSet {
