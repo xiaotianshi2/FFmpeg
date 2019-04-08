@@ -51,6 +51,7 @@
 #include "url.h"
 #include "vpcc.h"
 #include "dash.h"
+#include "dashenc_http.h"
 
 typedef enum {
     SEGMENT_TYPE_AUTO = 0,
@@ -183,16 +184,6 @@ static int64_t totalTime;
 static int64_t nrOfSamples;
 
 
-#define nr_of_threads 20
-
-typedef struct _thread_data_t {
-    int tid;
-    pthread_t thread;
-    AVIOContext *out;
-} thread_data_t;
-
-thread_data_t thr_data[nr_of_threads];
-pthread_t thr[nr_of_threads];
 
 // static void *thr_func(void *arg) {
 //   thread_data_t *data = (thread_data_t *)arg;
@@ -201,6 +192,37 @@ pthread_t thr[nr_of_threads];
 //   ffurl_shutdown(data->http_url_context, AVIO_FLAG_WRITE);
 //   pthread_exit(NULL);
 // }
+
+
+
+static int pool_flush_dynbuf(OutputStream *os, int *range_length)
+{
+    uint8_t *buffer;
+
+    if (!os->ctx->pb) {
+        return AVERROR(EINVAL);
+    }
+
+    // flush
+    av_write_frame(os->ctx, NULL);
+    avio_flush(os->ctx->pb);
+
+    // write out to file
+    *range_length = avio_close_dyn_buf(os->ctx->pb, &buffer);
+    os->ctx->pb = NULL;
+    // if (os->out)
+    //     avio_write(os->out, buffer + os->written_len, *range_length - os->written_len);
+
+    pool_avio_write(buffer + os->written_len, *range_length - os->written_len, os->conn_nr);
+
+    os->written_len = 0;
+    av_free(buffer);
+
+    // re-open buffer
+    return avio_open_dyn_buf(&os->ctx->pb);
+}
+
+
 
 /**
  * Used by the mpd and m4s files
@@ -223,80 +245,6 @@ static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
 #endif
     }
     return err;
-}
-
-static int pool_io_open(AVFormatContext *s, char *filename,
-                           AVDictionary **options, int conn_nr) {
-    DASHContext *c = s->priv_data;
-    int ret;
-
-    thread_data_t *data = &thr_data[conn_nr];
-    //AVIOContext **pb
-
-    URLContext *http_url_context = ffio_geturlcontext(data->out);
-    av_assert0(http_url_context);
-    av_log(NULL, AV_LOG_INFO, "pool_io_open conn_nr: %d, name: %s\n", conn_nr, filename);
-    ret = ff_http_do_new_request(http_url_context, filename);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_INFO, "pool_io_open error conn_nr: %d, name: %s\n", conn_nr, filename);
-        ff_format_io_close(s, &data->out);
-    }
-
-
-    return ret;
-}
-
-static int pool_open(struct AVFormatContext *s, const char *url,
-                   int flags, AVDictionary **opts) {
-    int ret;
-    DASHContext *c = s->priv_data;
-
-    //TODO: lock
-    c->thread_nr++;
-    int conn_nr = c->thread_nr;
-
-    thread_data_t *data = &thr_data[conn_nr];
-    ret = s->io_open(s, &data->out, url, AVIO_FLAG_WRITE, opts);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_INFO, "pool_open io error conn_nr: %d, name: %s\n", conn_nr, url);
-        return ret;
-    }
-
-    printf("pool_open data.out pointer: %p \n", data->out);
-
-
-    av_log(NULL, AV_LOG_INFO, "pool_open conn_nr: %d, name: %s\n", conn_nr, url);
-
-    return conn_nr;
-}
-
-
-static void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
-    DASHContext *c = s->priv_data;
-
-    thread_data_t *data = &thr_data[conn_nr];
-    av_log(NULL, AV_LOG_INFO, "pool_io_close conn_nr: %d\n", conn_nr);
-    printf("pool_close data.out pointer: %p \n", data->out);
-
-    URLContext *http_url_context = ffio_geturlcontext(data->out);
-    av_assert0(http_url_context);
-    avio_flush(data->out);
-
-    ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
-}
-
-static void pool_free(AVFormatContext *s, int conn_nr) {
-     thread_data_t *data = &thr_data[conn_nr];
-     av_log(NULL, AV_LOG_INFO, "pool_free conn_nr: %d\n", conn_nr);
-
-     ff_format_io_close(s, data->out);
-}
-
-static void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
-    thread_data_t *data = &thr_data[conn_nr];
-
-    avio_write(data->out, buf, size);
-    avio_flush(data->out);
 }
 
 static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filename) {
@@ -507,36 +455,6 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
                         extradata[1], extradata[2], extradata[3]);
         av_free(tmpbuf);
     }
-}
-
-static int pool_flush_dynbuf(OutputStream *os, int *range_length)
-{
-    uint8_t *buffer;
-
-    thread_data_t *data = &thr_data[os->conn_nr];
-
-    av_log(NULL, AV_LOG_INFO, "pool_flush_dynbuf conn_nr: %d, data.out pointer: %p \n", os->conn_nr, data->out);
-
-    if (!os->ctx->pb) {
-        return AVERROR(EINVAL);
-    }
-
-    // flush
-    av_write_frame(os->ctx, NULL);
-    avio_flush(os->ctx->pb);
-
-    // write out to file
-    *range_length = avio_close_dyn_buf(os->ctx->pb, &buffer);
-    os->ctx->pb = NULL;
-    // if (os->out)
-    //     avio_write(os->out, buffer + os->written_len, *range_length - os->written_len);
-    if (data->out)
-        avio_write(data->out, buffer + os->written_len, *range_length - os->written_len);
-    os->written_len = 0;
-    av_free(buffer);
-
-    // re-open buffer
-    return avio_open_dyn_buf(&os->ctx->pb);
 }
 
 static void set_http_options(AVDictionary **options, DASHContext *c)
