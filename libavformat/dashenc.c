@@ -36,6 +36,8 @@
 #include "libavutil/time_internal.h"
 #include "libavutil/time.h"
 
+#include <pthread.h>
+
 #include "avc.h"
 #include "avformat.h"
 #include "avio_internal.h"
@@ -78,7 +80,6 @@ typedef struct AdaptationSet {
 typedef struct OutputStream {
     AVFormatContext *ctx;
     int ctx_inited, as_idx;
-    AVIOContext *out;
     int packets_written;
     char initfile[1024];
     int64_t init_start_pos, pos;
@@ -102,6 +103,8 @@ typedef struct OutputStream {
     double availability_time_offset;
     int total_pkt_size;
     int muxer_overhead;
+
+    int conn_nr;
 } OutputStream;
 
 typedef struct DASHContext {
@@ -147,6 +150,7 @@ typedef struct DASHContext {
     int master_publish_rate;
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
+    int thread_nr;
 } DASHContext;
 
 static struct codec_string {
@@ -178,6 +182,29 @@ static int64_t minTime;
 static int64_t totalTime;
 static int64_t nrOfSamples;
 
+
+#define nr_of_threads 20
+
+typedef struct _thread_data_t {
+    int tid;
+    pthread_t thread;
+    AVIOContext *out;
+} thread_data_t;
+
+thread_data_t thr_data[nr_of_threads];
+pthread_t thr[nr_of_threads];
+
+// static void *thr_func(void *arg) {
+//   thread_data_t *data = (thread_data_t *)arg;
+
+//   av_log(NULL, AV_LOG_INFO, "Started thread: %d \n", data->tid);
+//   ffurl_shutdown(data->http_url_context, AVIO_FLAG_WRITE);
+//   pthread_exit(NULL);
+// }
+
+/**
+ * Used by the mpd and m4s files
+ */
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
                            AVDictionary **options) {
     DASHContext *c = s->priv_data;
@@ -189,12 +216,87 @@ static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
     } else {
         URLContext *http_url_context = ffio_geturlcontext(*pb);
         av_assert0(http_url_context);
+        av_log(NULL, AV_LOG_INFO, "io open: %s\n", filename);
         err = ff_http_do_new_request(http_url_context, filename);
         if (err < 0)
             ff_format_io_close(s, pb);
 #endif
     }
     return err;
+}
+
+static int pool_io_open(AVFormatContext *s, char *filename,
+                           AVDictionary **options, int conn_nr) {
+    DASHContext *c = s->priv_data;
+    int ret;
+
+    thread_data_t *data = &thr_data[conn_nr];
+    //AVIOContext **pb
+
+    URLContext *http_url_context = ffio_geturlcontext(data->out);
+    av_assert0(http_url_context);
+    av_log(NULL, AV_LOG_INFO, "pool_io_open conn_nr: %d, name: %s\n", conn_nr, filename);
+    ret = ff_http_do_new_request(http_url_context, filename);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_INFO, "pool_io_open error conn_nr: %d, name: %s\n", conn_nr, filename);
+        ff_format_io_close(s, &data->out);
+    }
+
+
+    return ret;
+}
+
+static int pool_open(struct AVFormatContext *s, const char *url,
+                   int flags, AVDictionary **opts) {
+    int ret;
+    DASHContext *c = s->priv_data;
+
+    //TODO: lock
+    c->thread_nr++;
+    int conn_nr = c->thread_nr;
+
+    thread_data_t *data = &thr_data[conn_nr];
+    ret = s->io_open(s, &data->out, url, AVIO_FLAG_WRITE, opts);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_INFO, "pool_open io error conn_nr: %d, name: %s\n", conn_nr, url);
+        return ret;
+    }
+
+    printf("pool_open data.out pointer: %p \n", data->out);
+
+
+    av_log(NULL, AV_LOG_INFO, "pool_open conn_nr: %d, name: %s\n", conn_nr, url);
+
+    return conn_nr;
+}
+
+
+static void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
+    DASHContext *c = s->priv_data;
+
+    thread_data_t *data = &thr_data[conn_nr];
+    av_log(NULL, AV_LOG_INFO, "pool_io_close conn_nr: %d\n", conn_nr);
+    printf("pool_close data.out pointer: %p \n", data->out);
+
+    URLContext *http_url_context = ffio_geturlcontext(data->out);
+    av_assert0(http_url_context);
+    avio_flush(data->out);
+
+    ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
+}
+
+static void pool_free(AVFormatContext *s, int conn_nr) {
+     thread_data_t *data = &thr_data[conn_nr];
+     av_log(NULL, AV_LOG_INFO, "pool_free conn_nr: %d\n", conn_nr);
+
+     ff_format_io_close(s, data->out);
+}
+
+static void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
+    thread_data_t *data = &thr_data[conn_nr];
+
+    avio_write(data->out, buf, size);
+    avio_flush(data->out);
 }
 
 static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filename) {
@@ -204,17 +306,46 @@ static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filenam
     if (!*pb)
         return;
 
+    av_log(NULL, AV_LOG_INFO, "io_close not new: %s\n", filename);
+
+
     if (!http_base_proto || !c->http_persistent) {
         ff_format_io_close(s, pb);
+        av_log(NULL, AV_LOG_INFO, "io_close 3. persistent: %d\n", c->http_persistent);
 #if CONFIG_HTTP_PROTOCOL
     } else {
         URLContext *http_url_context = ffio_geturlcontext(*pb);
         av_assert0(http_url_context);
         avio_flush(*pb);
+        int64_t time_start_ms = av_gettime() / 1000;
+
+        //joep: we need to make this async
+        //c->thread_nr++;
+        int quality_nr = c->thread_nr;
+        //thr_data[quality_nr].http_url_context = http_url_context;
+        // if(pthread_create(&thr[quality_nr], NULL, thr_func, &thr_data[quality_nr])) {
+        //     fprintf(stderr, "Error creating thread %d\n", quality_nr);
+        //     return 1;
+        // }
+
         ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
+
+
+        // int64_t time_end_ms = av_gettime() / 1000;
+        // if (time_end_ms - time_start_ms > 10)
+        //     av_log(NULL, AV_LOG_INFO, "close time: =\"%"PRId64"\" \n", time_end_ms - time_start_ms);
+
+        // if(pthread_join(thr[quality_nr], NULL)) {
+        //     fprintf(stderr, "Error joining thread: %d\n", quality_nr);
+        //     return 2;
+        // }
+        av_log(NULL, AV_LOG_DEBUG, "thread: %d joined \n", quality_nr);
+
+
 #endif
     }
 }
+
 
 static const char *get_format_str(SegmentType segment_type) {
     int i;
@@ -378,9 +509,13 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
     }
 }
 
-static int flush_dynbuf(OutputStream *os, int *range_length)
+static int pool_flush_dynbuf(OutputStream *os, int *range_length)
 {
     uint8_t *buffer;
+
+    thread_data_t *data = &thr_data[os->conn_nr];
+
+    av_log(NULL, AV_LOG_INFO, "pool_flush_dynbuf conn_nr: %d, data.out pointer: %p \n", os->conn_nr, data->out);
 
     if (!os->ctx->pb) {
         return AVERROR(EINVAL);
@@ -393,8 +528,10 @@ static int flush_dynbuf(OutputStream *os, int *range_length)
     // write out to file
     *range_length = avio_close_dyn_buf(os->ctx->pb, &buffer);
     os->ctx->pb = NULL;
-    if (os->out)
-        avio_write(os->out, buffer + os->written_len, *range_length - os->written_len);
+    // if (os->out)
+    //     avio_write(os->out, buffer + os->written_len, *range_length - os->written_len);
+    if (data->out)
+        avio_write(data->out, buffer + os->written_len, *range_length - os->written_len);
     os->written_len = 0;
     av_free(buffer);
 
@@ -505,6 +642,7 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
     if (final)
         ff_hls_write_end_list(c->m3u8_out);
 
+    //av_log(os->ctx, AV_LOG_INFO, "io_close\n");
     dashenc_io_close(s, &c->m3u8_out, temp_filename_hls);
 
     if (use_rename)
@@ -518,7 +656,7 @@ static int flush_init_segment(AVFormatContext *s, OutputStream *os)
     DASHContext *c = s->priv_data;
     int ret, range_length;
 
-    ret = flush_dynbuf(os, &range_length);
+    ret = pool_flush_dynbuf(os, &range_length);
     if (ret < 0)
         return ret;
 
@@ -526,7 +664,8 @@ static int flush_init_segment(AVFormatContext *s, OutputStream *os)
     if (!c->single_file) {
         char filename[1024];
         snprintf(filename, sizeof(filename), "%s%s", c->dirname, os->initfile);
-        dashenc_io_close(s, &os->out, filename);
+        //dashenc_io_close(s, &os->out, filename);
+        pool_io_close(s, filename, os->conn_nr);
     }
     return 0;
 }
@@ -549,7 +688,9 @@ static void dash_free(AVFormatContext *s)
         OutputStream *os = &c->streams[i];
         if (os->ctx && os->ctx->pb)
             ffio_free_dyn_buf(&os->ctx->pb);
-        ff_format_io_close(s, &os->out);
+
+        pool_free(s, os->conn_nr);
+        // ff_format_io_close(s, &os->out);
         if (os->ctx)
             avformat_free_context(os->ctx);
         for (j = 0; j < os->nb_segments; j++)
@@ -1243,10 +1384,15 @@ static int dash_init(AVFormatContext *s)
         }
         snprintf(filename, sizeof(filename), "%s%s", c->dirname, os->initfile);
         set_http_options(&opts, c);
-        ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
+
+
+        //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
+        ret = pool_open(s, filename, AVIO_FLAG_WRITE, &opts);
         av_dict_free(&opts);
         if (ret < 0)
             return ret;
+
+        os->conn_nr = ret;
         os->init_start_pos = 0;
 
         if (c->format_options_str) {
@@ -1507,6 +1653,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     DASHContext *c = s->priv_data;
     int i, ret = 0;
 
+
+
     const char *proto = avio_find_protocol_name(s->url);
     int use_rename = proto && !strcmp(proto, "file");
 
@@ -1553,7 +1701,7 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
             snprintf(os->full_path, sizeof(os->full_path), "%s%s", c->dirname, os->initfile);
         }
 
-        ret = flush_dynbuf(os, &range_length);
+        ret = pool_flush_dynbuf(os, &range_length);
         if (ret < 0)
             break;
         os->packets_written = 0;
@@ -1561,7 +1709,9 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         if (c->single_file) {
             find_index_range(s, os->full_path, os->pos, &index_length);
         } else {
-            dashenc_io_close(s, &os->out, os->temp_path);
+
+            //dashenc_io_close(s, &os->out, os->temp_path);
+            pool_io_close(s, os->temp_path, os->conn_nr);
 
             if (use_rename) {
                 ret = avpriv_io_move(os->temp_path, os->full_path);
@@ -1569,6 +1719,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
                     break;
             }
         }
+
+
 
         if (!os->muxer_overhead)
             os->muxer_overhead = ((int64_t) (range_length - os->total_pkt_size) *
@@ -1591,6 +1743,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         os->pos += range_length;
     }
 
+
+
     if (c->window_size) {
         for (i = 0; i < s->nb_streams; i++) {
             OutputStream *os = &c->streams[i];
@@ -1600,14 +1754,21 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         }
     }
 
+
+
     if (ret >= 0) {
         c->nr_of_streams_flushed++;
         if (c->nr_of_streams_flushed != c->nr_of_streams_to_flush)
             return ret;
 
         c->nr_of_streams_flushed = 0;
+        //This blocks for 1x the response delay, something else in this method also blocks 1x
         ret = write_manifest(s, final);
     }
+    // int64_t time_end_ms = av_gettime() / 1000;
+    // if (time_end_ms - time_start_ms > 10)
+    //     av_log(NULL, AV_LOG_INFO, "packet time: =\"%"PRId64"\" \n", time_end_ms - time_start_ms);
+
     return ret;
 }
 
@@ -1717,6 +1878,8 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         seg_end_duration = c->seg_duration;
     }
 
+
+
     //Skip flush if a video track is available and this is an audio track
     //Audio tracks are flushed as soon as the first video track is flushed.
     if ((!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
@@ -1741,9 +1904,12 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             }
         }
 
+        //This blocks when HTTP responses take long
         if ((ret = dash_flush(s, 0, pkt->stream_index)) < 0)
             return ret;
     }
+
+
 
     if (!os->packets_written) {
         // If we wrote a previous segment, adjust the start time of the segment
@@ -1760,14 +1926,20 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         os->max_pts = FFMAX(os->max_pts, pkt->pts + pkt->duration);
     os->packets_written++;
     os->total_pkt_size += pkt->size;
+
+
     if ((ret = ff_write_chained(os->ctx, 0, pkt, s, 0)) < 0)
         return ret;
+
+
 
     if (!os->init_range_length)
         flush_init_segment(s, os);
 
     //open the output context when the first frame of a segment is ready
     if (!c->single_file && os->packets_written == 1) {
+
+
         AVDictionary *opts = NULL;
         const char *proto = avio_find_protocol_name(s->url);
         int use_rename = proto && !strcmp(proto, "file");
@@ -1780,7 +1952,10 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         snprintf(os->temp_path, sizeof(os->temp_path),
                  use_rename ? "%s.tmp" : "%s", os->full_path);
         set_http_options(&opts, c);
-        ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
+
+        //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
+        ret = pool_io_open(s, os->temp_path, &opts, os->conn_nr);
+
         av_dict_free(&opts);
         if (ret < 0) {
             return handle_io_open_error(s, ret, os->temp_path);
@@ -1802,16 +1977,24 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             write_styp(os->ctx->pb);
         avio_flush(os->ctx->pb);
         len = avio_get_dyn_buf (os->ctx->pb, &buf);
-        if (os->out) {
-            avio_write(os->out, buf + os->written_len, len - os->written_len);
-            avio_flush(os->out);
+        if (os->conn_nr > 0) {
+            //TODO: does this block?
+            pool_write_flush(buf + os->written_len, len - os->written_len, os->conn_nr);
+
+            // avio_write(os->out, buf + os->written_len, len - os->written_len);
+            // avio_flush(os->out);
         }
         os->written_len = len;
     }
 
+
+
     return ret;
 }
 
+/**
+ * When stopping FFmpeg this method will change the manifest from live to on demand or will delete the files.
+ */
 static int dash_write_trailer(AVFormatContext *s)
 {
     DASHContext *c = s->priv_data;
