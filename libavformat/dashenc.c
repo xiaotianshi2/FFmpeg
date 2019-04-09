@@ -105,7 +105,7 @@ typedef struct OutputStream {
     int total_pkt_size;
     int muxer_overhead;
 
-    int conn_nr;
+    int conn_nr; /* initialized to -1 in dash_init() */
 } OutputStream;
 
 typedef struct DASHContext {
@@ -1236,6 +1236,7 @@ static int dash_init(AVFormatContext *s)
         AVDictionary *opts = NULL;
         char filename[1024];
 
+        os->conn_nr = -1;
         os->bit_rate = s->streams[i]->codecpar->bit_rate;
         if (!os->bit_rate) {
             int level = s->strict_std_compliance >= FF_COMPLIANCE_STRICT ?
@@ -1905,7 +1906,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             write_styp(os->ctx->pb);
         avio_flush(os->ctx->pb);
         len = avio_get_dyn_buf (os->ctx->pb, &buf);
-        if (os->conn_nr > 0) {
+        if (os->conn_nr >= 0) {
             //TODO: does this block?
             pool_write_flush(buf + os->written_len, len - os->written_len, os->conn_nr);
 

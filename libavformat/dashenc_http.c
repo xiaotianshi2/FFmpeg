@@ -29,7 +29,7 @@ static pthread_t thr[nr_of_threads];
 static int claim_connection() {
     //TODO: lock
 
-    for(int i = 0; i < nr_of_threads; i++) {
+    for(int i = 1; i < nr_of_threads; i++) {
         thread_data_t *data = &thr_data[i];
         if (!data->claimed) {
             data->claimed = 1;
