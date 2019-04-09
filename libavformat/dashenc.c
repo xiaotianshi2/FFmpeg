@@ -139,7 +139,6 @@ typedef struct DASHContext {
     int hls_playlist;
     int http_persistent;
     int master_playlist_created;
-    AVIOContext *m3u8_out;
     int streaming;
     int64_t timeout;
     int index_correction;
@@ -500,6 +499,8 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
     int use_rename = proto && !strcmp(proto, "file");
     int i, start_index, start_number;
     double prog_date_time = 0;
+    int conn_nr;
+    AVIOContext *out;
 
     get_start_index_number(os, c, &start_index, &start_number);
 
@@ -513,10 +514,12 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
     snprintf(temp_filename_hls, sizeof(temp_filename_hls), use_rename ? "%s.tmp" : "%s", filename_hls);
 
     set_http_options(&http_opts, c);
-    ret = dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
+    //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
+    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent, -1);
+
     av_dict_free(&http_opts);
-    if (ret < 0) {
-        handle_io_open_error(s, ret, temp_filename_hls);
+    if (conn_nr < 0) {
+        handle_io_open_error(s, conn_nr, temp_filename_hls);
         return;
     }
 
@@ -527,10 +530,12 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
             target_duration = lrint(duration);
     }
 
-    ff_hls_write_playlist_header(c->m3u8_out, 6, -1, target_duration,
+    pool_get_context(&out, conn_nr);
+
+    ff_hls_write_playlist_header(out, 6, -1, target_duration,
                                  start_number, PLAYLIST_TYPE_NONE);
 
-    ff_hls_write_init_file(c->m3u8_out, os->initfile, c->single_file,
+    ff_hls_write_init_file(out, os->initfile, c->single_file,
                            os->init_range_length, os->init_start_pos);
 
     for (i = start_index; i < os->nb_segments; i++) {
@@ -544,7 +549,7 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
         }
         seg->prog_date_time = prog_date_time;
 
-        ret = ff_hls_write_file_entry(c->m3u8_out, 0, c->single_file,
+        ret = ff_hls_write_file_entry(out, 0, c->single_file,
                                 (double) seg->duration / timescale, 0,
                                 seg->range_length, seg->start_pos, NULL,
                                 c->single_file ? os->initfile : seg->file,
@@ -555,13 +560,14 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
     }
 
     if (prefetch_url)
-        avio_printf(c->m3u8_out, "#EXT-X-PREFETCH:%s\n", prefetch_url);
+        avio_printf(out, "#EXT-X-PREFETCH:%s\n", prefetch_url);
 
     if (final)
-        ff_hls_write_end_list(c->m3u8_out);
+        ff_hls_write_end_list(out);
 
     //av_log(os->ctx, AV_LOG_INFO, "io_close\n");
-    dashenc_io_close(s, &c->m3u8_out, temp_filename_hls);
+    //dashenc_io_close(s, &c->m3u8_out, temp_filename_hls);
+    pool_io_close(s, temp_filename_hls, conn_nr);
 
     if (use_rename)
         if (avpriv_io_move(temp_filename_hls, filename_hls) < 0) {
@@ -621,9 +627,8 @@ static void dash_free(AVFormatContext *s)
     av_freep(&c->streams);
 
     //ff_format_io_close(s, &c->mpd_out);
+    //ff_format_io_close(s, &c->m3u8_out);
     pool_free_all(s);
-
-    ff_format_io_close(s, &c->m3u8_out);
 }
 
 static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatContext *s,
@@ -1077,6 +1082,8 @@ static int write_manifest(AVFormatContext *s, int final)
         char audio_codec_str[128] = "\0";
         int is_default = 1;
         int max_audio_bitrate = 0;
+        int m3u8_conn_nr;
+        AVIOContext *m3u8_out;
 
         // Publish master playlist only the configured rate
         if (c->master_playlist_created && (!c->master_publish_rate ||
@@ -1091,13 +1098,15 @@ static int write_manifest(AVFormatContext *s, int final)
         snprintf(temp_filename, sizeof(temp_filename), use_rename ? "%s.tmp" : "%s", filename_hls);
 
         set_http_options(&opts, c);
-        ret = dashenc_io_open(s, &c->m3u8_out, temp_filename, &opts);
+        //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename, &opts);
+        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, -1);
         av_dict_free(&opts);
-        if (ret < 0) {
-            return handle_io_open_error(s, ret, temp_filename);
+        if (m3u8_conn_nr < 0) {
+            return handle_io_open_error(s, m3u8_conn_nr, temp_filename);
         }
 
-        ff_hls_write_playlist_version(c->m3u8_out, 7);
+        pool_get_context(&m3u8_out, m3u8_conn_nr);
+        ff_hls_write_playlist_version(m3u8_out, 7);
 
         for (i = 0; i < s->nb_streams; i++) {
             char playlist_file[64];
@@ -1108,7 +1117,7 @@ static int write_manifest(AVFormatContext *s, int final)
             if (os->segment_type != SEGMENT_TYPE_MP4)
                 continue;
             get_hls_playlist_name(playlist_file, sizeof(playlist_file), NULL, i);
-            ff_hls_write_audio_rendition(c->m3u8_out, (char *)audio_group,
+            ff_hls_write_audio_rendition(m3u8_out, (char *)audio_group,
                                          playlist_file, NULL, i, is_default);
             max_audio_bitrate = FFMAX(st->codecpar->bit_rate +
                                       os->muxer_overhead, max_audio_bitrate);
@@ -1146,11 +1155,11 @@ static int write_manifest(AVFormatContext *s, int final)
             if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
                 continue;
             get_hls_playlist_name(playlist_file, sizeof(playlist_file), NULL, i);
-            ff_hls_write_stream_info(st, c->m3u8_out, stream_bitrate,
+            ff_hls_write_stream_info(st, m3u8_out, stream_bitrate,
                                      playlist_file, agroup,
                                      codec_str_ptr, NULL);
         }
-        dashenc_io_close(s, &c->m3u8_out, temp_filename);
+        dashenc_io_close(s, &m3u8_out, temp_filename);
         if (use_rename)
             if ((ret = avpriv_io_move(temp_filename, filename_hls)) < 0)
                 return ret;
