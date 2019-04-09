@@ -139,7 +139,6 @@ typedef struct DASHContext {
     int hls_playlist;
     int http_persistent;
     int master_playlist_created;
-    AVIOContext *mpd_out;
     AVIOContext *m3u8_out;
     int streaming;
     int64_t timeout;
@@ -233,6 +232,7 @@ static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
     int http_base_proto = filename ? ff_is_http_proto(filename) : 0;
     int err = AVERROR_MUXER_NOT_FOUND;
     if (!*pb || !http_base_proto || !c->http_persistent) {
+        av_log(NULL, AV_LOG_INFO, "io open-if: %s\n", filename);
         err = s->io_open(s, pb, filename, AVIO_FLAG_WRITE, options);
 #if CONFIG_HTTP_PROTOCOL
     } else {
@@ -620,7 +620,9 @@ static void dash_free(AVFormatContext *s)
     }
     av_freep(&c->streams);
 
-    ff_format_io_close(s, &c->mpd_out);
+    //ff_format_io_close(s, &c->mpd_out);
+    pool_free_all(s);
+
     ff_format_io_close(s, &c->m3u8_out);
 }
 
@@ -974,7 +976,7 @@ static int write_manifest(AVFormatContext *s, int final)
     DASHContext *c = s->priv_data;
     AVIOContext *out;
     char temp_filename[1024];
-    int ret, i;
+    int ret, i, conn_nr;
     const char *proto = avio_find_protocol_name(s->url);
     int use_rename = proto && !strcmp(proto, "file");
     static unsigned int warned_non_file = 0;
@@ -986,12 +988,19 @@ static int write_manifest(AVFormatContext *s, int final)
 
     snprintf(temp_filename, sizeof(temp_filename), use_rename ? "%s.tmp" : "%s", s->url);
     set_http_options(&opts, c);
-    ret = dashenc_io_open(s, &c->mpd_out, temp_filename, &opts);
+    //ret = dashenc_io_open(s, &c->mpd_out, temp_filename, &opts);
+    conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, -1);
+
     av_dict_free(&opts);
-    if (ret < 0) {
-        return handle_io_open_error(s, ret, temp_filename);
+    if (conn_nr < 0) {
+        return handle_io_open_error(s, conn_nr, temp_filename);
     }
-    out = c->mpd_out;
+
+    av_log(s, AV_LOG_INFO, "1: addr: %p\n", out);
+
+    pool_get_context(&out, conn_nr);
+    av_log(s, AV_LOG_INFO, "2: addr: %p\n", out);
+
     avio_printf(out, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     avio_printf(out, "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
                 "\txmlns=\"urn:mpeg:dash:schema:mpd:2011\"\n"
@@ -1054,7 +1063,8 @@ static int write_manifest(AVFormatContext *s, int final)
 
     avio_printf(out, "</MPD>\n");
     avio_flush(out);
-    dashenc_io_close(s, &c->mpd_out, temp_filename);
+    //dashenc_io_close(s, &c->mpd_out, temp_filename);
+    pool_io_close(s, temp_filename, conn_nr);
 
     if (use_rename) {
         if ((ret = avpriv_io_move(temp_filename, s->url)) < 0)
@@ -1872,7 +1882,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         set_http_options(&opts, c);
 
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
-        ret = pool_io_open(s, os->temp_path, &opts, os->conn_nr);
+        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, os->conn_nr);
 
         av_dict_free(&opts);
         if (ret < 0) {
