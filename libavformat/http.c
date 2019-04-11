@@ -235,14 +235,19 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
         err = ffurl_open_whitelist(&s->hd, buf, AVIO_FLAG_READ_WRITE,
                                    &h->interrupt_callback, options,
                                    h->protocol_whitelist, h->protocol_blacklist, h);
-        if (err < 0)
+        if (err < 0) {
+            av_log(s, AV_LOG_WARNING, "http_open_cnx_internal 1, url: %s\n", path);
             return err;
+        }
+
     }
 
     err = http_connect(h, path, local_path, hoststr,
                        auth, proxyauth, &location_changed);
-    if (err < 0)
+    if (err < 0) {
+        av_log(s, AV_LOG_WARNING, "http_open_cnx_internal 2, url: %s\n", path);
         return err;
+    }
 
     return location_changed;
 }
@@ -299,8 +304,12 @@ redo:
 fail:
     if (s->hd)
         ffurl_closep(&s->hd);
-    if (location_changed < 0)
+    if (location_changed < 0) {
+        av_log(s, AV_LOG_WARNING, "http open error location_changed negative, url: %s\n", h->filename);
         return location_changed;
+    }
+
+    av_log(s, AV_LOG_WARNING, "http open error code: %d, url: %s\n", s->http_code, h->filename);
     return ff_http_averror(s->http_code, AVERROR(EIO));
 }
 

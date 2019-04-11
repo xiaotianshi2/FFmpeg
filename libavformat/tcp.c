@@ -112,6 +112,8 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     char portstr[10];
     s->open_timeout = 5000000;
 
+    av_log(s, AV_LOG_INFO, "tcp_open url: %s\n", uri);
+
     av_url_split(proto, sizeof(proto), NULL, 0, hostname, sizeof(hostname),
         &port, path, sizeof(path), uri);
     if (strcmp(proto, "tcp"))
@@ -242,8 +244,11 @@ static int tcp_read(URLContext *h, uint8_t *buf, int size)
             return ret;
     }
     ret = recv(s->fd, buf, size, 0);
-    if (ret == 0)
+    if (ret == 0) {
+        av_log(s, AV_LOG_INFO, "tcp_read eof\n");
         return AVERROR_EOF;
+    }
+
     return ret < 0 ? ff_neterrno() : ret;
 }
 
@@ -280,6 +285,8 @@ static int tcp_shutdown(URLContext *h, int flags)
 static int tcp_close(URLContext *h)
 {
     TCPContext *s = h->priv_data;
+    av_log(s, AV_LOG_INFO, "tcp_close: %s\n", h->filename, h);
+
     closesocket(s->fd);
     return 0;
 }

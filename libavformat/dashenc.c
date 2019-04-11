@@ -150,7 +150,6 @@ typedef struct DASHContext {
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
     int thread_nr;
-    int mpd_conn_nr;
 } DASHContext;
 
 static struct codec_string {
@@ -516,7 +515,7 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
 
     set_http_options(&http_opts, c);
     //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
-    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent, c->mpd_conn_nr);
+    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent);
 
     av_dict_free(&http_opts);
     if (conn_nr < 0) {
@@ -614,7 +613,7 @@ static void dash_free(AVFormatContext *s)
         if (os->ctx && os->ctx->pb)
             ffio_free_dyn_buf(&os->ctx->pb);
 
-        pool_free(s, os->conn_nr);
+        // replace by pool_free_all()
         // ff_format_io_close(s, &os->out);
         if (os->ctx)
             avformat_free_context(os->ctx);
@@ -982,7 +981,7 @@ static int write_manifest(AVFormatContext *s, int final)
     DASHContext *c = s->priv_data;
     AVIOContext *out;
     char temp_filename[1024];
-    int ret, i;
+    int ret, i, mpd_conn_nr;
     const char *proto = avio_find_protocol_name(s->url);
     int use_rename = proto && !strcmp(proto, "file");
     static unsigned int warned_non_file = 0;
@@ -996,15 +995,15 @@ static int write_manifest(AVFormatContext *s, int final)
     set_http_options(&opts, c);
     //ret = dashenc_io_open(s, &c->mpd_out, temp_filename, &opts);
 
-    c->mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, c->mpd_conn_nr);
+    mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent);
 
     av_dict_free(&opts);
-    if (c->mpd_conn_nr < 0) {
-        return handle_io_open_error(s, c->mpd_conn_nr, temp_filename);
+    if (mpd_conn_nr < 0) {
+        return handle_io_open_error(s, mpd_conn_nr, temp_filename);
     }
 
     //av_log(s, AV_LOG_INFO, "1mpd get_context: out_addr: %p, conn_nr: %d\n", out, c->mpd_conn_nr);
-    pool_get_context(&out, c->mpd_conn_nr);
+    pool_get_context(&out, mpd_conn_nr);
     //av_log(s, AV_LOG_INFO, "2mpd get_context: out_addr: %p, conn_nr: %d\n", out, c->mpd_conn_nr);
 
     avio_printf(out, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
@@ -1070,7 +1069,7 @@ static int write_manifest(AVFormatContext *s, int final)
     avio_printf(out, "</MPD>\n");
     avio_flush(out);
     //dashenc_io_close(s, &c->mpd_out, temp_filename);
-    pool_io_close(s, temp_filename, c->mpd_conn_nr);
+    pool_io_close(s, temp_filename, mpd_conn_nr);
 
     if (use_rename) {
         if ((ret = avpriv_io_move(temp_filename, s->url)) < 0)
@@ -1100,7 +1099,7 @@ static int write_manifest(AVFormatContext *s, int final)
 
         set_http_options(&opts, c);
         //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename, &opts);
-        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, c->mpd_conn_nr);
+        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent);
         av_dict_free(&opts);
         if (m3u8_conn_nr < 0) {
             return handle_io_open_error(s, m3u8_conn_nr, temp_filename);
@@ -1192,8 +1191,6 @@ static int dash_init(AVFormatContext *s)
 
     c->nr_of_streams_to_flush = 0;
 
-    pool_init();
-
 #if FF_API_DASH_MIN_SEG_DURATION
     if (c->min_seg_duration != 5000000) {
         av_log(s, AV_LOG_WARNING, "The min_seg_duration option is deprecated and will be removed. Please use the -seg_duration\n");
@@ -1239,8 +1236,6 @@ static int dash_init(AVFormatContext *s)
 
     if ((ret = init_segment_types(s)) < 0)
         return ret;
-
-    c->mpd_conn_nr = -1;
 
     for (i = 0; i < s->nb_streams; i++) {
         OutputStream *os = &c->streams[i];
@@ -1330,7 +1325,8 @@ static int dash_init(AVFormatContext *s)
 
 
         //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
-        ret = pool_open(s, filename, AVIO_FLAG_WRITE, &opts);
+        //ret = pool_open(s, filename, AVIO_FLAG_WRITE, &opts);
+        ret = pool_io_open(s, filename, &opts, c->http_persistent);
         av_dict_free(&opts);
         if (ret < 0)
             return ret;
@@ -1899,7 +1895,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         set_http_options(&opts, c);
 
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
-        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, os->conn_nr);
+        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent);
         av_dict_free(&opts);
         if (ret < 0) {
             return handle_io_open_error(s, ret, os->temp_path);
