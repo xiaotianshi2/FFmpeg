@@ -245,7 +245,8 @@ static int tcp_read(URLContext *h, uint8_t *buf, int size)
     }
     ret = recv(s->fd, buf, size, 0);
     if (ret == 0) {
-        av_log(s, AV_LOG_INFO, "tcp_read eof\n");
+        av_log(s, AV_LOG_WARNING, "tcp_read eof, url: %s\n", h->filename);
+
         return AVERROR_EOF;
     }
 
@@ -285,7 +286,7 @@ static int tcp_shutdown(URLContext *h, int flags)
 static int tcp_close(URLContext *h)
 {
     TCPContext *s = h->priv_data;
-    av_log(s, AV_LOG_INFO, "tcp_close: %s\n", h->filename, h);
+    av_log(s, AV_LOG_INFO, "tcp_close: %s\n", h->filename);
 
     closesocket(s->fd);
     return 0;

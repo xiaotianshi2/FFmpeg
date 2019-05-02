@@ -28,12 +28,12 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 /**
  * Claims a free connection and returns the connection number
  */
-static int claim_connection() {
+static int claim_connection(void) {
     pthread_mutex_lock(&lock);
     for(int i = 0; i < nr_of_threads; i++) {
         thread_data_t *data = &thr_data[i];
         if (!data->claimed) {
-            //av_log(NULL, AV_LOG_INFO, "conn_id: %d claimed: %d\n", i, data->claimed);
+            av_log(NULL, AV_LOG_DEBUG, "conn_id: %d claimed: %d\n", i, data->claimed);
             data->claimed = 1;
             data->tid = i;
             pthread_mutex_unlock(&lock);
@@ -63,7 +63,6 @@ static int open_request(AVFormatContext *s, char *url, AVDictionary **options) {
         data->opened = 1;
     }
 
-    //av_log(s, AV_LOG_INFO, "conn_id: %d opened, addr: %p\n", conn_nr, data->out);
     return ret;
 }
 
@@ -78,12 +77,13 @@ int pool_io_open(AVFormatContext *s, char *filename,
     int ret = AVERROR_MUXER_NOT_FOUND;
 
     if (!http_base_proto || !http_persistent) {
-        ret = open_request(s, filename, options);
         //open_request returns the newly claimed conn_nr
-        av_log(s, AV_LOG_INFO, "pool_io_open done, new: %s, new conn_nr: %d\n", filename, ret);
+        ret = open_request(s, filename, options);
+
 #if CONFIG_HTTP_PROTOCOL
     } else {
         thread_data_t *data;
+        URLContext *http_url_context;
         //claim new item from pool and open connection if needed
         int conn_nr = claim_connection();
         data = &thr_data[conn_nr];
@@ -100,9 +100,8 @@ int pool_io_open(AVFormatContext *s, char *filename,
             return conn_nr;
         }
 
-        URLContext *http_url_context = ffio_geturlcontext(data->out);
+        http_url_context = ffio_geturlcontext(data->out);
         av_assert0(http_url_context);
-        //av_log(s, AV_LOG_INFO, "pool_io_open conn_nr: %d, claimed: %d, name: %s\n", conn_nr, data->claimed, filename);
 
         ret = ff_http_do_new_request(http_url_context, filename);
         if (ret < 0) {
@@ -118,21 +117,24 @@ int pool_io_open(AVFormatContext *s, char *filename,
 
 static void *thr_io_close(void *arg) {
     thread_data_t *data = (thread_data_t *)arg;
+    int ret;
 
     URLContext *http_url_context = ffio_geturlcontext(data->out);
     av_assert0(http_url_context);
     avio_flush(data->out);
 
-    //av_log(NULL, AV_LOG_INFO, "thr_io_close thread: %d, addr: %p \n", data->tid, data->out);
+    av_log(NULL, AV_LOG_DEBUG, "thr_io_close thread: %d, addr: %p \n", data->tid, data->out);
 
-    ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
-    //av_log(NULL, AV_LOG_INFO, "thr_io_close 2 thread: %d, addr: %p \n", data->tid, data->out);
-
+    ret = ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
     pthread_mutex_lock(&lock);
+    if (ret < 0) {
+        //TODO: do we need to do some cleanup if ffurl_shutdown fails?
+        av_log(NULL, AV_LOG_INFO, "-event- request failed: %d, url: %s.\n", ret, http_url_context->filename);
+        data->opened = 0;
+    }
+
     data->claimed = 0;
     pthread_mutex_unlock(&lock);
-
-    //av_log(NULL, AV_LOG_INFO, "conn_id: %d released, addr: %p \n", data->tid, data->out);
 
     pthread_exit(NULL);
 }
@@ -141,21 +143,23 @@ static void *thr_io_close(void *arg) {
 void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
     thread_data_t *data = &thr_data[conn_nr];
 
+    av_log(NULL, AV_LOG_DEBUG, "pool_io_close conn_nr: %d\n", conn_nr);
+
     if(pthread_create(&data->thread, NULL, thr_io_close, &thr_data[conn_nr])) {
-        fprintf(stderr, "Error creating close thread for conn_nr: %d\n", conn_nr);
-        return -1;
+        av_log(NULL, AV_LOG_ERROR, "Error creating close thread for conn_nr: %d\n", conn_nr);
+        return;
     }
 }
 
 void pool_free(AVFormatContext *s, int conn_nr) {
      thread_data_t *data = &thr_data[conn_nr];
-     av_log(NULL, AV_LOG_INFO, "pool_free conn_nr: %d\n", conn_nr);
+     av_log(NULL, AV_LOG_DEBUG, "pool_free conn_nr: %d\n", conn_nr);
 
-     ff_format_io_close(s, data->out);
+     ff_format_io_close(s, &data->out);
 }
 
 void pool_free_all(AVFormatContext *s) {
-    av_log(NULL, AV_LOG_INFO, "pool_free_all\n");
+    av_log(NULL, AV_LOG_DEBUG, "pool_free_all\n");
      for(int i = 0; i < nr_of_threads; i++) {
         thread_data_t *data = &thr_data[i];
         if (data->out)

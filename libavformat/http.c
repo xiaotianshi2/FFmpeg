@@ -1590,6 +1590,9 @@ static int http_read(URLContext *h, uint8_t *buf, int size)
     size = http_read_stream(h, buf, size);
     if (size > 0)
         s->icy_data_read += size;
+
+    if (size < 0)
+        av_log(h, AV_LOG_WARNING, "http_read error: %d, url: %s\n", size, h->filename);
     return size;
 }
 
@@ -1634,14 +1637,21 @@ static int http_shutdown(URLContext *h, int flags)
         /* flush the receive buffer when it is write only mode */
         if (!(flags & AVIO_FLAG_READ)) {
             char buf[1024];
+            char status[100];
             int read_ret;
             //s->hd->flags |= AVIO_FLAG_NONBLOCK;
+
+            /* calls avio.c->ffurl_read() */
             read_ret = ffurl_read(s->hd, buf, sizeof(buf));
-            av_log(h, AV_LOG_VERBOSE, "%s response: [\n%s\n]\n", s->location, buf);
-            //s->hd->flags &= ~AVIO_FLAG_NONBLOCK;
-            if (read_ret < 0 && read_ret != AVERROR(EAGAIN)) {
-                av_log(h, AV_LOG_ERROR, "URL read error:  %d\n", read_ret);
+
+            sprintf(status, "%.*s", 10, buf); //sprintf does null termination
+            av_log(h, AV_LOG_INFO, "response: [%s] - %s \n", status, s->location);
+
+            if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
                 ret = read_ret;
+
+            if (read_ret == AVERROR(EAGAIN)) {
+                av_log(h, AV_LOG_WARNING, "http_shutdown - again: %d, location: %s\n", read_ret, s->location);
             }
         }
         s->end_chunked_post = 1;
