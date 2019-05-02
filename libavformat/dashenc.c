@@ -183,16 +183,6 @@ static int64_t nrOfSamples;
 
 
 
-// static void *thr_func(void *arg) {
-//   thread_data_t *data = (thread_data_t *)arg;
-
-//   av_log(NULL, AV_LOG_INFO, "Started thread: %d \n", data->tid);
-//   ffurl_shutdown(data->http_url_context, AVIO_FLAG_WRITE);
-//   pthread_exit(NULL);
-// }
-
-
-
 static int pool_flush_dynbuf(OutputStream *os, int *range_length)
 {
     uint8_t *buffer;
@@ -220,11 +210,7 @@ static int pool_flush_dynbuf(OutputStream *os, int *range_length)
     return avio_open_dyn_buf(&os->ctx->pb);
 }
 
-
-
-/**
- * Used by the mpd and m4s files
- */
+/* Still being used by deleting of old files */
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
                            AVDictionary **options) {
     DASHContext *c = s->priv_data;
@@ -253,46 +239,17 @@ static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filenam
     if (!*pb)
         return;
 
-    av_log(NULL, AV_LOG_INFO, "io_close not new: %s\n", filename);
-
-
     if (!http_base_proto || !c->http_persistent) {
         ff_format_io_close(s, pb);
-        av_log(NULL, AV_LOG_INFO, "io_close 3. persistent: %d\n", c->http_persistent);
 #if CONFIG_HTTP_PROTOCOL
     } else {
         URLContext *http_url_context = ffio_geturlcontext(*pb);
         av_assert0(http_url_context);
         avio_flush(*pb);
-        int64_t time_start_ms = av_gettime() / 1000;
-
-        //joep: we need to make this async
-        //c->thread_nr++;
-        //int quality_nr = c->thread_nr;
-        //thr_data[quality_nr].http_url_context = http_url_context;
-        // if(pthread_create(&thr[quality_nr], NULL, thr_func, &thr_data[quality_nr])) {
-        //     fprintf(stderr, "Error creating thread %d\n", quality_nr);
-        //     return 1;
-        // }
-
         ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
-
-
-        // int64_t time_end_ms = av_gettime() / 1000;
-        // if (time_end_ms - time_start_ms > 10)
-        //     av_log(NULL, AV_LOG_INFO, "close time: =\"%"PRId64"\" \n", time_end_ms - time_start_ms);
-
-        // if(pthread_join(thr[quality_nr], NULL)) {
-        //     fprintf(stderr, "Error joining thread: %d\n", quality_nr);
-        //     return 2;
-        // }
-        //av_log(NULL, AV_LOG_DEBUG, "thread: %d joined \n", quality_nr);
-
-
 #endif
     }
 }
-
 
 static const char *get_format_str(SegmentType segment_type) {
     int i;
@@ -994,7 +951,6 @@ static int write_manifest(AVFormatContext *s, int final)
     snprintf(temp_filename, sizeof(temp_filename), use_rename ? "%s.tmp" : "%s", s->url);
     set_http_options(&opts, c);
     //ret = dashenc_io_open(s, &c->mpd_out, temp_filename, &opts);
-
     mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent);
 
     av_dict_free(&opts);
@@ -1002,9 +958,7 @@ static int write_manifest(AVFormatContext *s, int final)
         return handle_io_open_error(s, mpd_conn_nr, temp_filename);
     }
 
-    //av_log(s, AV_LOG_INFO, "1mpd get_context: out_addr: %p, conn_nr: %d\n", out, c->mpd_conn_nr);
     pool_get_context(&out, mpd_conn_nr);
-    //av_log(s, AV_LOG_INFO, "2mpd get_context: out_addr: %p, conn_nr: %d\n", out, c->mpd_conn_nr);
 
     avio_printf(out, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     avio_printf(out, "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
@@ -1159,7 +1113,8 @@ static int write_manifest(AVFormatContext *s, int final)
                                      playlist_file, agroup,
                                      codec_str_ptr, NULL);
         }
-        dashenc_io_close(s, &m3u8_out, temp_filename);
+        //dashenc_io_close(s, &m3u8_out, temp_filename);
+        pool_io_close(s, temp_filename, m3u8_conn_nr);
         if (use_rename)
             if ((ret = avpriv_io_move(temp_filename, filename_hls)) < 0)
                 return ret;
