@@ -19,6 +19,7 @@ typedef struct _thread_data_t {
     AVIOContext *out;
     int claimed;
     int opened;
+    int64_t release_time;
 } thread_data_t;
 
 static thread_data_t thr_data[nr_of_threads];
@@ -26,24 +27,34 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 
 /**
- * Claims a free connection and returns the connection number
+ * Claims a free connection and returns the connection number.
+ * Released connections are used first.
  */
 static int claim_connection(void) {
+    int64_t lowest_release_time = av_gettime() / 1000;
+    int data_nr = -1;
     pthread_mutex_lock(&lock);
+
     for(int i = 0; i < nr_of_threads; i++) {
         thread_data_t *data = &thr_data[i];
         if (!data->claimed) {
-            av_log(NULL, AV_LOG_DEBUG, "conn_id: %d claimed: %d\n", i, data->claimed);
-            data->claimed = 1;
-            data->tid = i;
-            pthread_mutex_unlock(&lock);
-            return i;
+            if ((data_nr == -1) || (data->release_time != 0 && data->release_time < lowest_release_time)) {
+                data_nr = i;
+                lowest_release_time = data->release_time;
+            }
         }
     }
 
-    pthread_mutex_unlock(&lock);
+    if (data_nr == -1) {
+        pthread_mutex_unlock(&lock);
+        return -1;
+    }
 
-    return -1;
+    av_log(NULL, AV_LOG_INFO, "Claimed conn_id: %d\n", data_nr);
+    thr_data[data_nr].claimed = 1;
+    thr_data[data_nr].tid = data_nr;
+    pthread_mutex_unlock(&lock);
+    return data_nr;
 }
 
 /**
@@ -122,6 +133,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
 static void *thr_io_close(void *arg) {
     thread_data_t *data = (thread_data_t *)arg;
     int ret;
+    int64_t release_time = av_gettime() / 1000;
 
     URLContext *http_url_context = ffio_geturlcontext(data->out);
     av_assert0(http_url_context);
@@ -138,6 +150,7 @@ static void *thr_io_close(void *arg) {
     }
 
     data->claimed = 0;
+    data->release_time = release_time;
     pthread_mutex_unlock(&lock);
 
     pthread_exit(NULL);
