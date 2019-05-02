@@ -235,19 +235,14 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
         err = ffurl_open_whitelist(&s->hd, buf, AVIO_FLAG_READ_WRITE,
                                    &h->interrupt_callback, options,
                                    h->protocol_whitelist, h->protocol_blacklist, h);
-        if (err < 0) {
-            av_log(s, AV_LOG_WARNING, "http_open_cnx_internal 1, url: %s\n", path);
+        if (err < 0)
             return err;
-        }
-
     }
 
     err = http_connect(h, path, local_path, hoststr,
                        auth, proxyauth, &location_changed);
-    if (err < 0) {
-        av_log(s, AV_LOG_WARNING, "http_open_cnx_internal 2, url: %s\n", path);
+    if (err < 0)
         return err;
-    }
 
     return location_changed;
 }
@@ -305,7 +300,7 @@ fail:
     if (s->hd)
         ffurl_closep(&s->hd);
     if (location_changed < 0) {
-        av_log(s, AV_LOG_WARNING, "http open error location_changed negative, url: %s\n", h->filename);
+        av_log(s, AV_LOG_WARNING, "http open error location_changed: %d, url: %s\n", location_changed, h->filename);
         return location_changed;
     }
 
@@ -1637,15 +1632,13 @@ static int http_shutdown(URLContext *h, int flags)
         /* flush the receive buffer when it is write only mode */
         if (!(flags & AVIO_FLAG_READ)) {
             char buf[1024];
-            char status[100];
             int read_ret;
             //s->hd->flags |= AVIO_FLAG_NONBLOCK;
 
             /* calls avio.c->ffurl_read() */
             read_ret = ffurl_read(s->hd, buf, sizeof(buf));
 
-            sprintf(status, "%.*s", 10, buf); //sprintf does null termination
-            av_log(h, AV_LOG_INFO, "response: [%s] - %s \n", status, s->location);
+            av_log(h, AV_LOG_INFO, "HTTP response: [%d] - %s \n", s->http_code, s->location);
 
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
                 ret = read_ret;

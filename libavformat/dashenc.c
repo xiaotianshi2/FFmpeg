@@ -36,8 +36,6 @@
 #include "libavutil/time_internal.h"
 #include "libavutil/time.h"
 
-#include <pthread.h>
-
 #include "avc.h"
 #include "avformat.h"
 #include "avio_internal.h"
@@ -149,7 +147,6 @@ typedef struct DASHContext {
     int master_publish_rate;
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
-    int thread_nr;
 } DASHContext;
 
 static struct codec_string {
@@ -183,32 +180,7 @@ static int64_t nrOfSamples;
 
 
 
-static int pool_flush_dynbuf(OutputStream *os, int *range_length)
-{
-    uint8_t *buffer;
 
-    if (!os->ctx->pb) {
-        return AVERROR(EINVAL);
-    }
-
-    // flush
-    av_write_frame(os->ctx, NULL);
-    avio_flush(os->ctx->pb);
-
-    // write out to file
-    *range_length = avio_close_dyn_buf(os->ctx->pb, &buffer);
-    os->ctx->pb = NULL;
-    // if (os->out)
-    //     avio_write(os->out, buffer + os->written_len, *range_length - os->written_len);
-
-    pool_avio_write(buffer + os->written_len, *range_length - os->written_len, os->conn_nr);
-
-    os->written_len = 0;
-    av_free(buffer);
-
-    // re-open buffer
-    return avio_open_dyn_buf(&os->ctx->pb);
-}
 
 /* Still being used by deleting of old files */
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
@@ -217,13 +189,11 @@ static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
     int http_base_proto = filename ? ff_is_http_proto(filename) : 0;
     int err = AVERROR_MUXER_NOT_FOUND;
     if (!*pb || !http_base_proto || !c->http_persistent) {
-        av_log(NULL, AV_LOG_INFO, "io open-if: %s\n", filename);
         err = s->io_open(s, pb, filename, AVIO_FLAG_WRITE, options);
 #if CONFIG_HTTP_PROTOCOL
     } else {
         URLContext *http_url_context = ffio_geturlcontext(*pb);
         av_assert0(http_url_context);
-        av_log(NULL, AV_LOG_INFO, "io open: %s\n", filename);
         err = ff_http_do_new_request(http_url_context, filename);
         if (err < 0)
             ff_format_io_close(s, pb);
@@ -232,6 +202,7 @@ static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
     return err;
 }
 
+/*
 static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filename) {
     DASHContext *c = s->priv_data;
     int http_base_proto = filename ? ff_is_http_proto(filename) : 0;
@@ -250,6 +221,7 @@ static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filenam
 #endif
     }
 }
+*/
 
 static const char *get_format_str(SegmentType segment_type) {
     int i;
@@ -413,6 +385,32 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
     }
 }
 
+/* kept in dashenc.c because it uses OutputStream */
+static int pool_flush_dynbuf(OutputStream *os, int *range_length)
+{
+    uint8_t *buffer;
+
+    if (!os->ctx->pb) {
+        return AVERROR(EINVAL);
+    }
+
+    // flush
+    av_write_frame(os->ctx, NULL);
+    avio_flush(os->ctx->pb);
+
+    // write out to file
+    *range_length = avio_close_dyn_buf(os->ctx->pb, &buffer);
+    os->ctx->pb = NULL;
+
+    pool_avio_write(buffer + os->written_len, *range_length - os->written_len, os->conn_nr);
+
+    os->written_len = 0;
+    av_free(buffer);
+
+    // re-open buffer
+    return avio_open_dyn_buf(&os->ctx->pb);
+}
+
 static void set_http_options(AVDictionary **options, DASHContext *c)
 {
     if (c->method)
@@ -522,7 +520,6 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
     if (final)
         ff_hls_write_end_list(out);
 
-    //av_log(os->ctx, AV_LOG_INFO, "io_close\n");
     //dashenc_io_close(s, &c->m3u8_out, temp_filename_hls);
     pool_io_close(s, temp_filename_hls, conn_nr);
 
@@ -739,6 +736,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     AdaptationSet *as = &c->as[as_index];
     AVDictionaryEntry *lang, *role;
     int i;
+    int j, target_duration = 0;
 
     avio_printf(out, "\t\t<AdaptationSet id=\"%s\" contentType=\"%s\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"",
                 as->id, as->media_type == AVMEDIA_TYPE_VIDEO ? "video" : "audio");
@@ -755,7 +753,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
 
     // Moved target duration calculation here to result in consistent value across streams and time
     // TODO: Just use segment size and prevent segments from exceeding that
-    int j, target_duration = 0;
+
     for (i = 0; i < s->nb_streams; i++) {
         OutputStream *os = &c->streams[i];
         int timescale = os->ctx->streams[0]->time_base.den;
@@ -1278,9 +1276,7 @@ static int dash_init(AVFormatContext *s)
         snprintf(filename, sizeof(filename), "%s%s", c->dirname, os->initfile);
         set_http_options(&opts, c);
 
-
         //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
-        //ret = pool_open(s, filename, AVIO_FLAG_WRITE, &opts);
         ret = pool_io_open(s, filename, &opts, c->http_persistent);
         av_dict_free(&opts);
         if (ret < 0)
@@ -1547,8 +1543,6 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     DASHContext *c = s->priv_data;
     int i, ret = 0;
 
-
-
     const char *proto = avio_find_protocol_name(s->url);
     int use_rename = proto && !strcmp(proto, "file");
 
@@ -1603,7 +1597,6 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         if (c->single_file) {
             find_index_range(s, os->full_path, os->pos, &index_length);
         } else {
-
             //dashenc_io_close(s, &os->out, os->temp_path);
             pool_io_close(s, os->temp_path, os->conn_nr);
 
@@ -1613,8 +1606,6 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
                     break;
             }
         }
-
-
 
         if (!os->muxer_overhead)
             os->muxer_overhead = ((int64_t) (range_length - os->total_pkt_size) *
@@ -1637,8 +1628,6 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         os->pos += range_length;
     }
 
-
-
     if (c->window_size) {
         for (i = 0; i < s->nb_streams; i++) {
             OutputStream *os = &c->streams[i];
@@ -1648,20 +1637,14 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         }
     }
 
-
-
     if (ret >= 0) {
         c->nr_of_streams_flushed++;
         if (c->nr_of_streams_flushed != c->nr_of_streams_to_flush)
             return ret;
 
         c->nr_of_streams_flushed = 0;
-        //This blocks for 1x the response delay, something else in this method also blocks 1x
         ret = write_manifest(s, final);
     }
-    // int64_t time_end_ms = av_gettime() / 1000;
-    // if (time_end_ms - time_start_ms > 10)
-    //     av_log(NULL, AV_LOG_INFO, "packet time: =\"%"PRId64"\" \n", time_end_ms - time_start_ms);
 
     return ret;
 }
@@ -1674,7 +1657,7 @@ static void print_stats(AVPacket *pkt)
 {
     int size;
     const uint8_t *side_data;
-    const logInterval = 5 * 1000000;
+    const int logInterval = 5 * 1000000;
 
     side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &size);
     if (side_data && size) {
@@ -1686,6 +1669,7 @@ static void print_stats(AVPacket *pkt)
                 //av_gettime_relative is in microseconds
                 int64_t curr_time = av_gettime_relative();
                 int64_t pTime = (curr_time - pkt_init_time) / 1000;
+                int64_t avgTime;
 
                 nrOfSamples++;
                 totalTime += pTime;
@@ -1700,7 +1684,7 @@ static void print_stats(AVPacket *pkt)
 
                 if (curr_time - lastLog > logInterval) {
                     lastLog = curr_time;
-                    int64_t avgTime = totalTime / nrOfSamples;
+                    avgTime = totalTime / nrOfSamples;
 
                     av_log(NULL, AV_LOG_INFO, "Processing time (ms) min: %"PRId64", max: %"PRId64", avg: %"PRId64", time: %"PRId64"\n", minTime, maxTime, avgTime, curr_time);
 
@@ -1772,8 +1756,6 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         seg_end_duration = c->seg_duration;
     }
 
-
-
     //Skip flush if a video track is available and this is an audio track
     //Audio tracks are flushed as soon as the first video track is flushed.
     if ((!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
@@ -1798,12 +1780,9 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             }
         }
 
-        //This blocks when HTTP responses take long
         if ((ret = dash_flush(s, 0, pkt->stream_index)) < 0)
             return ret;
     }
-
-
 
     if (!os->packets_written) {
         // If we wrote a previous segment, adjust the start time of the segment
@@ -1825,17 +1804,11 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     if ((ret = ff_write_chained(os->ctx, 0, pkt, s, 0)) < 0)
         return ret;
 
-
-
     if (!os->init_range_length)
         flush_init_segment(s, os);
 
-
-
     //open the output context when the first frame of a segment is ready
     if (!c->single_file && os->packets_written == 1) {
-
-
         AVDictionary *opts = NULL;
         const char *proto = avio_find_protocol_name(s->url);
         int use_rename = proto && !strcmp(proto, "file");
@@ -1866,33 +1839,23 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     //write out the data immediately in streaming mode
     if (c->streaming && os->segment_type == SEGMENT_TYPE_MP4) {
-        print_stats(pkt);
-
-
         int len = 0;
         uint8_t *buf = NULL;
+
+        print_stats(pkt);
+
         if (!os->written_len)
             write_styp(os->ctx->pb);
         avio_flush(os->ctx->pb);
-
         len = avio_get_dyn_buf (os->ctx->pb, &buf);
-        //os->ctx->pb moet eigen conn_nr hebben?
+
         if (os->conn_nr >= 0) {
             //TODO: does this block?
             pool_write_flush(buf + os->written_len, len - os->written_len, os->conn_nr);
-
-            // avio_write(os->out, buf + os->written_len, len - os->written_len);
-            // avio_flush(os->out);
         }
-        //jepppp
-    // av_log(NULL, AV_LOG_INFO, "start sleep\n");
-    // sleep(1);
-    // av_log(NULL, AV_LOG_INFO, "stop sleep\n");
 
         os->written_len = len;
     }
-
-
 
     return ret;
 }

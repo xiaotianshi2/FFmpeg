@@ -115,6 +115,10 @@ int pool_io_open(AVFormatContext *s, char *filename,
     return ret;
 }
 
+/**
+ * This method closes the request and reads the response.
+ * It is supposed to be passed to pthread_create.
+ */
 static void *thr_io_close(void *arg) {
     thread_data_t *data = (thread_data_t *)arg;
     int ret;
@@ -139,7 +143,9 @@ static void *thr_io_close(void *arg) {
     pthread_exit(NULL);
 }
 
-
+/**
+ * Closes the request.
+ */
 void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
     thread_data_t *data = &thr_data[conn_nr];
 
