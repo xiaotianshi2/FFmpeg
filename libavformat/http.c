@@ -1638,7 +1638,7 @@ static int http_shutdown(URLContext *h, int flags)
             /* calls avio.c->ffurl_read() */
             read_ret = ffurl_read(s->hd, buf, sizeof(buf));
 
-            av_log(h, AV_LOG_INFO, "HTTP response: [%d] - %s \n", s->http_code, s->location);
+            av_log(h, AV_LOG_INFO, "HTTP response: %d, - %s \n", s->http_code, s->location);
 
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
                 ret = read_ret;
