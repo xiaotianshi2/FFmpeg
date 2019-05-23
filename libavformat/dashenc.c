@@ -1865,6 +1865,9 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
  */
 static int dash_write_trailer(AVFormatContext *s)
 {
+    //LLS-421 For now we're skipping on demand manifest creation
+    return 0;
+
     DASHContext *c = s->priv_data;
     int i;
 
