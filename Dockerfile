@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN \
     apt-get update && \
-    apt-get install software-properties-common -y && \ 
+    apt-get install software-properties-common -y && \
     add-apt-repository universe && \
     add-apt-repository ppa:xorg-edgers/ppa && \
     apt-get install -y \
@@ -28,7 +28,7 @@ RUN \
     libva2 \
     libva-drm2 \
     libva-x11-2 \
-    libxv1 \    
+    libxv1 \
     libx264-152 \
     libx264-dev \
     nasm \
@@ -38,11 +38,14 @@ RUN \
     yasm \
     zlib1g-dev
 
+# Setup vmaf
+RUN cd /tmp;git clone https://github.com/Netflix/vmaf.git;cd vmaf/ptools;make;cd ../wrapper;make -j8;cd ..;sudo make install;cd /app
+
 # Copy the current directory contents into the container at /app
 COPY . /app
 
 RUN ./configure  \
-    --enable-gpl \ 
+    --enable-gpl \
     --enable-openssl \
     --enable-version3 \
     --enable-static \
@@ -60,9 +63,8 @@ RUN ./configure  \
     --enable-vaapi \
     --enable-libfreetype \
     --enable-fontconfig \
+    --enable-libvmaf \
     --extra-libs="-lpthread -lm" \
     --pkg-config-flags=--static
-#--enable-decklink \
-#--extra-cflags="-Idecklink"
 
 RUN make -j8

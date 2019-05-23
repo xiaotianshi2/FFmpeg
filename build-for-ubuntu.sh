@@ -5,6 +5,7 @@
 
 set -e
 
+rm -f ffmpeg
 docker build -t exmg-lls .
 docker run --name exmg-lls-container exmg-lls /bin/true
 docker cp exmg-lls-container:/app/ffmpeg ffmpeg
