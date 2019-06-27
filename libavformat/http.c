@@ -1633,12 +1633,25 @@ static int http_shutdown(URLContext *h, int flags)
         if (!(flags & AVIO_FLAG_READ)) {
             char buf[1024];
             int read_ret;
+            char *p, *end;
             //s->hd->flags |= AVIO_FLAG_NONBLOCK;
 
             /* calls avio.c->ffurl_read() */
             read_ret = ffurl_read(s->hd, buf, sizeof(buf));
 
-            av_log(h, AV_LOG_INFO, "HTTP response: %d, - %s \n", s->http_code, s->location);
+            //Find start of http status code
+            p = buf;
+            while (*p != '/' && *p != '\0')
+                p++;
+            while (*p == '/')
+                p++;
+            while (!av_isspace(*p) && *p != '\0')
+                p++;
+            while (av_isspace(*p))
+                p++;
+            s->http_code = strtol(p, &end, 10);
+
+            av_log(h, AV_LOG_INFO, "HTTP response: %d, - %s ,%s\n", s->http_code, s->location, buf);
 
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
                 ret = read_ret;
