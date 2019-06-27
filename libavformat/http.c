@@ -1651,7 +1651,7 @@ static int http_shutdown(URLContext *h, int flags)
                 p++;
             s->http_code = strtol(p, &end, 10);
 
-            av_log(h, AV_LOG_INFO, "HTTP response: %d, - %s ,%s\n", s->http_code, s->location, buf);
+            av_log(h, AV_LOG_INFO, "HTTP response: %d, - %s \n", s->http_code, s->location);
 
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
                 ret = read_ret;
