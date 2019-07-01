@@ -1825,10 +1825,10 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
         ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent);
         av_dict_free(&opts);
+        os->conn_nr = ret;
         if (ret < 0) {
             return handle_io_open_error(s, ret, os->temp_path);
         }
-        os->conn_nr = ret;
 
         if (c->lhls) {
             char *prefetch_url = use_rename ? NULL : os->filename;
@@ -1852,6 +1852,8 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (os->conn_nr >= 0) {
             //TODO: does this block?
             pool_write_flush(buf + os->written_len, len - os->written_len, os->conn_nr);
+        } else {
+            av_log(s, AV_LOG_INFO, "Skip writing chunk because connection is not open.\n");
         }
 
         os->written_len = len;
