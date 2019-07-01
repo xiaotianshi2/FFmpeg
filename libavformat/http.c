@@ -1910,6 +1910,11 @@ static int http_proxy_write(URLContext *h, const uint8_t *buf, int size)
     return ffurl_write(s->hd, buf, size);
 }
 
+char *ff_http_get_url(URLContext *h) {
+    HTTPContext *s = h->priv_data;
+    return s->location;
+}
+
 const URLProtocol ff_httpproxy_protocol = {
     .name                = "httpproxy",
     .url_open            = http_proxy_open,

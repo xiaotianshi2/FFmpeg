@@ -137,7 +137,6 @@ int pool_io_open(AVFormatContext *s, char *filename,
             force_release_connection(data);
             return ret;
         }
-        av_log(s, AV_LOG_INFO, "pool_io_open end conn_nr: %d, url: %s\n", conn_nr, http_url_context->filename);
         ret = conn_nr;
 #endif
     }
@@ -164,7 +163,7 @@ static void *thr_io_close(void *arg) {
     pthread_mutex_lock(&lock);
     if (ret < 0) {
         //TODO: do we need to do some cleanup if ffurl_shutdown fails?
-        av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, url: %s.\n", ret, data->tid, http_url_context->filename);
+        av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, url: %s.\n", ret, data->tid, ff_http_get_url(http_url_context));
         data->opened = 0;
     }
 
