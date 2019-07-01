@@ -42,6 +42,7 @@ typedef struct TCPContext {
     int recv_buffer_size;
     int send_buffer_size;
     int tcp_nodelay;
+    int64_t open_time;
 #if !HAVE_WINSOCK2_H
     int tcp_mss;
 #endif /* !HAVE_WINSOCK2_H */
@@ -112,7 +113,9 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     char portstr[10];
     s->open_timeout = 5000000;
 
-    av_log(s, AV_LOG_INFO, "tcp_open url: %s\n", uri);
+    s->open_time = av_gettime() / 1000;
+    av_log(s, AV_LOG_INFO, "%"PRId64" - tcp_open url: %s\n", s->open_time, uri);
+
 
     av_url_split(proto, sizeof(proto), NULL, 0, hostname, sizeof(hostname),
         &port, path, sizeof(path), uri);
@@ -286,7 +289,9 @@ static int tcp_shutdown(URLContext *h, int flags)
 static int tcp_close(URLContext *h)
 {
     TCPContext *s = h->priv_data;
-    av_log(s, AV_LOG_INFO, "tcp_close: %s\n", h->filename);
+    int64_t time_end_ms = av_gettime() / 1000;
+    int64_t duration = time_end_ms - s->open_time;
+    av_log(s, AV_LOG_INFO, "%"PRId64" ms - tcp_close: %s\n", duration, h->filename);
 
     closesocket(s->fd);
     return 0;

@@ -116,7 +116,9 @@ int pool_io_open(AVFormatContext *s, char *filename,
 
         ret = ff_http_do_new_request(http_url_context, filename);
         if (ret < 0) {
-            av_log(s, AV_LOG_WARNING, "pool_io_open error conn_nr: %d, error: %d, name: %s\n", conn_nr, ret, filename);
+            int64_t curr_time_ms = av_gettime() / 1000;
+            int64_t idle_tims_ms = curr_time_ms - data->release_time;
+            av_log(s, AV_LOG_WARNING, "pool_io_open error conn_nr: %d, idle_time: %"PRId64", error: %d, name: %s\n", conn_nr, idle_tims_ms, ret, filename);
             ff_format_io_close(s, &data->out);
         }
         ret = conn_nr;
@@ -160,12 +162,14 @@ static void *thr_io_close(void *arg) {
  * Closes the request.
  */
 void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
+    int ret;
     thread_data_t *data = &thr_data[conn_nr];
 
     av_log(NULL, AV_LOG_DEBUG, "pool_io_close conn_nr: %d\n", conn_nr);
 
-    if(pthread_create(&data->thread, NULL, thr_io_close, &thr_data[conn_nr])) {
-        av_log(NULL, AV_LOG_ERROR, "Error creating close thread for conn_nr: %d\n", conn_nr);
+    ret = pthread_create(&data->thread, NULL, thr_io_close, &thr_data[conn_nr]);
+    if (ret) {
+        av_log(NULL, AV_LOG_ERROR, "Error %d while creating close thread for conn_nr: %d\n", ret, conn_nr);
         return;
     }
 }
