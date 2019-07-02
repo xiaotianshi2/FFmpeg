@@ -20,6 +20,9 @@ typedef struct _thread_data_t {
     int claimed; /* This thread is claimed for a specific request */
     int opened;  /* out is opened */
     int64_t release_time;
+
+    //Request specific data
+    int must_succeed; /* If 1 the request must succeed, otherwise we'll crash the program */
 } thread_data_t;
 
 static thread_data_t thr_data[nr_of_threads];
@@ -85,12 +88,19 @@ static void force_release_connection(thread_data_t *data) {
     pthread_mutex_unlock(&lock);
 }
 
+static void abort_if_needed(int mustSucceed) {
+    if (mustSucceed) {
+        av_log(NULL, AV_LOG_ERROR, "Abort because request needs to succeed and it did not.\n");
+        abort();
+    }
+}
+
 /**
  * Claim a connection and start a new request.
  * The claimed connection number is returned.
  */
 int pool_io_open(AVFormatContext *s, char *filename,
-                 AVDictionary **options, int http_persistent) {
+                 AVDictionary **options, int http_persistent, int must_succeed) {
 
     int http_base_proto = filename ? ff_is_http_proto(filename) : 0;
     int ret = AVERROR_MUXER_NOT_FOUND;
@@ -105,17 +115,17 @@ int pool_io_open(AVFormatContext *s, char *filename,
         URLContext *http_url_context;
         //claim new item from pool and open connection if needed
         int conn_nr = claim_connection(filename);
-        if (conn_nr < 0) {
-            av_log(s, AV_LOG_WARNING, "Could claim connection for %s\n", filename);
-            return ret;
-        }
+        //Crash when we cannot claim a new connection. We should restart ffmpeg in this case.
+        av_assert0(conn_nr >= 0);
 
         data = &thr_data[conn_nr];
+        data->must_succeed = must_succeed;
         if (!data->opened) {
             ret = s->io_open(s, &data->out, filename, AVIO_FLAG_WRITE, options);
             if (ret < 0) {
                 av_log(s, AV_LOG_WARNING, "Could not open %s\n", filename);
                 force_release_connection(data);
+                abort_if_needed(must_succeed);
                 return ret;
             }
 
@@ -135,6 +145,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
             av_log(s, AV_LOG_WARNING, "pool_io_open error conn_nr: %d, idle_time: %"PRId64", error: %d, name: %s\n", conn_nr, idle_tims_ms, ret, filename);
             ff_format_io_close(s, &data->out);
             force_release_connection(data);
+            abort_if_needed(must_succeed);
             return ret;
         }
         ret = conn_nr;
@@ -164,6 +175,7 @@ static void *thr_io_close(void *arg) {
     if (ret < 0) {
         //TODO: do we need to do some cleanup if ffurl_shutdown fails?
         av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, url: %s.\n", ret, data->tid, ff_http_get_url(http_url_context));
+        abort_if_needed(data->must_succeed);
         data->opened = 0;
     }
 
@@ -187,17 +199,18 @@ void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
     }
 
     data = &thr_data[conn_nr];
-
     av_log(NULL, AV_LOG_DEBUG, "pool_io_close conn_nr: %d\n", conn_nr);
 
     if (!data->opened) {
         av_log(s, AV_LOG_INFO, "Skip closing HTTP request because connection is not opened. Filename: %s\n", filename);
+        abort_if_needed(data->must_succeed);
         return;
     }
 
     ret = pthread_create(&data->thread, NULL, thr_io_close, &thr_data[conn_nr]);
     if (ret) {
         av_log(NULL, AV_LOG_ERROR, "Error %d while creating close thread for conn_nr: %d\n", ret, conn_nr);
+        abort_if_needed(data->must_succeed);
         return;
     }
 }
@@ -242,17 +255,19 @@ void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
     avio_flush(data->out);
 }
 
-void pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
+int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
     thread_data_t *data;
 
     if (conn_nr < 0) {
         av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_avio_write)\n");
-        return;
+        return -1;
     }
     data = &thr_data[conn_nr];
 
     if (data->out)
         avio_write(data->out, buf, size);
+
+    return 0;
 }
 
 /**

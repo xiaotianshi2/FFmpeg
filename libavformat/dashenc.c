@@ -389,6 +389,7 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
 static int pool_flush_dynbuf(OutputStream *os, int *range_length)
 {
     uint8_t *buffer;
+    int ret;
 
     if (!os->ctx->pb) {
         return AVERROR(EINVAL);
@@ -402,7 +403,9 @@ static int pool_flush_dynbuf(OutputStream *os, int *range_length)
     *range_length = avio_close_dyn_buf(os->ctx->pb, &buffer);
     os->ctx->pb = NULL;
 
-    pool_avio_write(buffer + os->written_len, *range_length - os->written_len, os->conn_nr);
+    ret = pool_avio_write(buffer + os->written_len, *range_length - os->written_len, os->conn_nr);
+    if (ret <0)
+        return ret;
 
     os->written_len = 0;
     av_free(buffer);
@@ -470,7 +473,7 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
 
     set_http_options(&http_opts, c);
     //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
-    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent);
+    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent, 0);
 
     av_dict_free(&http_opts);
     if (conn_nr < 0) {
@@ -949,7 +952,7 @@ static int write_manifest(AVFormatContext *s, int final)
     snprintf(temp_filename, sizeof(temp_filename), use_rename ? "%s.tmp" : "%s", s->url);
     set_http_options(&opts, c);
     //ret = dashenc_io_open(s, &c->mpd_out, temp_filename, &opts);
-    mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent);
+    mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, 0);
 
     av_dict_free(&opts);
     if (mpd_conn_nr < 0) {
@@ -1051,7 +1054,7 @@ static int write_manifest(AVFormatContext *s, int final)
 
         set_http_options(&opts, c);
         //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename, &opts);
-        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent);
+        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, 0);
         av_dict_free(&opts);
         if (m3u8_conn_nr < 0) {
             return handle_io_open_error(s, m3u8_conn_nr, temp_filename);
@@ -1277,7 +1280,7 @@ static int dash_init(AVFormatContext *s)
         set_http_options(&opts, c);
 
         //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
-        ret = pool_io_open(s, filename, &opts, c->http_persistent);
+        ret = pool_io_open(s, filename, &opts, c->http_persistent, 1);
         av_dict_free(&opts);
         if (ret < 0)
             return ret;
@@ -1366,9 +1369,12 @@ static int dash_write_header(AVFormatContext *s)
         // Flush init segment
         // Only for WebM segment, since for mp4 delay_moov is set and
         // the init segment is thus flushed after the first packets.
-        if (os->segment_type == SEGMENT_TYPE_WEBM &&
-            (ret = flush_init_segment(s, os)) < 0)
-            return ret;
+        if (os->segment_type == SEGMENT_TYPE_WEBM) {
+            ret = flush_init_segment(s, os);
+            // Assert because we need to assure the init segments are written correctly
+            av_assert0(ret >= 0);
+        }
+
     }
     return ret;
 }
@@ -1804,8 +1810,13 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     if ((ret = ff_write_chained(os->ctx, 0, pkt, s, 0)) < 0)
         return ret;
 
-    if (!os->init_range_length)
-        flush_init_segment(s, os);
+    if (!os->init_range_length) {
+        ret = flush_init_segment(s, os);
+        av_log(s, AV_LOG_INFO, "ret val: %d\n", ret);
+        // Assert because we need to assure the init segments are written correctly
+        av_assert0(ret >= 0);
+    }
+
 
     //open the output context when the first frame of a segment is ready
     if (!c->single_file && os->packets_written == 1) {
@@ -1823,7 +1834,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         set_http_options(&opts, c);
 
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
-        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent);
+        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0);
         av_dict_free(&opts);
         os->conn_nr = ret;
         if (ret < 0) {
