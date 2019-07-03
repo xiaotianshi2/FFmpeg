@@ -6,6 +6,7 @@
 
 #include "avio_internal.h"
 #include "utils.c"
+#include "dashenc_pool.h"
 #if CONFIG_HTTP_PROTOCOL
 #include "http.h"
 #endif
@@ -15,7 +16,7 @@
 
 typedef struct _thread_data_t {
     int tid;
-    pthread_t thread;
+    //pthread_t thread;
     AVIOContext *out;
     int claimed; /* This thread is claimed for a specific request */
     int opened;  /* out is opened */
@@ -27,6 +28,7 @@ typedef struct _thread_data_t {
 
 static thread_data_t thr_data[nr_of_threads];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static void *thread_pool;
 
 
 /**
@@ -183,7 +185,7 @@ static void *thr_io_close(void *arg) {
     data->release_time = release_time;
     pthread_mutex_unlock(&lock);
 
-    pthread_exit(NULL);
+    return NULL;
 }
 
 /**
@@ -191,7 +193,6 @@ static void *thr_io_close(void *arg) {
  */
 void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
     thread_data_t *data;
-    int ret;
 
     if (conn_nr < 0) {
         av_log(s, AV_LOG_WARNING, "Invalid conn_nr (pool_io_close) for filename: %s\n", filename);
@@ -207,12 +208,7 @@ void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
         return;
     }
 
-    ret = pthread_create(&data->thread, NULL, thr_io_close, &thr_data[conn_nr]);
-    if (ret) {
-        av_log(NULL, AV_LOG_ERROR, "Error %d while creating close thread for conn_nr: %d\n", ret, conn_nr);
-        abort_if_needed(data->must_succeed);
-        return;
-    }
+    pool_enqueue(thread_pool, &thr_data[conn_nr], 0);
 }
 
 void pool_free(AVFormatContext *s, int conn_nr) {
@@ -283,4 +279,8 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
     }
     data = &thr_data[conn_nr];
     *out = data->out;
+}
+
+void pool_init() {
+    thread_pool = pool_start(thr_io_close, 20);
 }

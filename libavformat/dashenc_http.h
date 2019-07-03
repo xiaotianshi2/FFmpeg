@@ -10,5 +10,6 @@ void pool_free(AVFormatContext *s, int conn_nr);
 void pool_write_flush(const unsigned char *buf, int size, int conn_nr);
 int pool_avio_write(const unsigned char *buf, int size, int conn_nr);
 void pool_get_context(AVIOContext **out, int conn_nr);
+void pool_init(void);
 
 #endif /* AVFORMAT_DASH_HTTP_H */

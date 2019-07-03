@@ -1140,6 +1140,8 @@ static int dash_init(AVFormatContext *s)
     char *ptr;
     char basename[1024];
 
+    pool_init();
+
     if (c->single_file_name)
         c->single_file = 1;
     if (c->single_file)
