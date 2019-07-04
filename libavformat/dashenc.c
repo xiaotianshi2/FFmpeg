@@ -404,11 +404,14 @@ static int pool_flush_dynbuf(OutputStream *os, int *range_length)
     os->ctx->pb = NULL;
 
     ret = pool_avio_write(buffer + os->written_len, *range_length - os->written_len, os->conn_nr);
-    if (ret <0)
-        return ret;
 
     os->written_len = 0;
     av_free(buffer);
+
+    if (ret < 0) {
+        avio_open_dyn_buf(&os->ctx->pb);
+        return ret;
+    }
 
     // re-open buffer
     return avio_open_dyn_buf(&os->ctx->pb);
@@ -1599,8 +1602,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
         }
 
         ret = pool_flush_dynbuf(os, &range_length);
-        if (ret < 0)
-            break;
+        // if (ret < 0)
+        //     break;
         os->packets_written = 0;
 
         if (c->single_file) {
@@ -1789,8 +1792,11 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             }
         }
 
-        if ((ret = dash_flush(s, 0, pkt->stream_index)) < 0)
-            return ret;
+        if ((ret = dash_flush(s, 0, pkt->stream_index)) < 0) {
+            //swallow error. dash_flush will return an error if the internet connection is gone.
+            //return ret;
+        }
+
     }
 
     if (!os->packets_written) {
@@ -1808,7 +1814,6 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         os->max_pts = FFMAX(os->max_pts, pkt->pts + pkt->duration);
     os->packets_written++;
     os->total_pkt_size += pkt->size;
-
 
     if ((ret = ff_write_chained(os->ctx, 0, pkt, s, 0)) < 0)
         return ret;
@@ -1881,11 +1886,11 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
  */
 static int dash_write_trailer(AVFormatContext *s)
 {
-    //LLS-421 For now we're skipping on demand manifest creation
-    return 0;
-
     DASHContext *c = s->priv_data;
     int i;
+
+    //LLS-421 For now we're skipping on demand manifest creation
+    return 0;
 
     if (s->nb_streams > 0) {
         OutputStream *os = &c->streams[0];
