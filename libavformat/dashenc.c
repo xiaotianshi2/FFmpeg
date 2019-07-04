@@ -1423,6 +1423,7 @@ static int add_segment(OutputStream *os, const char *file,
 
 static void write_styp(AVIOContext *pb)
 {
+
     avio_wb32(pb, 24);
     ffio_wfourcc(pb, "styp");
     ffio_wfourcc(pb, "msdh");
