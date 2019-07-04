@@ -281,5 +281,5 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
 }
 
 void pool_init() {
-    thread_pool = pool_start(thr_io_close, 2);
+    thread_pool = pool_start(thr_io_close, 20);
 }
