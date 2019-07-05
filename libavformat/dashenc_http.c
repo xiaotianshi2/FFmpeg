@@ -12,11 +12,12 @@
 #endif
 
 typedef struct _connection_t {
-    int nr;
-    AVIOContext *out;
-    int claimed; /* This connection is claimed for a specific request */
-    int opened;  /* out is opened */
-    int64_t release_time;
+    int nr;               /* Number of the connection, used to lookup this connection in the connections list */
+    AVIOContext *out;     /* The TCP connection */
+    int claimed;          /* This connection is claimed for a specific request */
+    int opened;           /* TCP connection (out) is opened */
+    int64_t release_time; /* Time the last request of the connection has finished */
+    AVFormatContext *s;   /* Used to clean up the TCP connection if closing of a request fails */
 
     //Request specific data
     int must_succeed; /* If 1 the request must succeed, otherwise we'll crash the program */
@@ -174,9 +175,9 @@ static void *thr_io_close(void *arg) {
     ret = ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
     pthread_mutex_lock(&lock);
     if (ret < 0) {
-        //TODO: do we need to do some cleanup if ffurl_shutdown fails?
         av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, url: %s.\n", ret, conn->nr, ff_http_get_url(http_url_context));
         abort_if_needed(conn->must_succeed);
+        ff_format_io_close(conn->s, &conn->out);
         conn->opened = 0;
     }
 
@@ -206,6 +207,8 @@ void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
         abort_if_needed(conn->must_succeed);
         return;
     }
+
+    conn->s = s;
 
     pool_enqueue(thread_pool, conn, 0);
 }
