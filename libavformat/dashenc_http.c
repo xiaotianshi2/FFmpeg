@@ -164,6 +164,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
 static void *thr_io_close(void *arg) {
     connection_t *conn = (connection_t *)arg;
     int ret;
+    int response_code;
     int64_t release_time = av_gettime() / 1000;
 
     URLContext *http_url_context = ffio_geturlcontext(conn->out);
@@ -173,9 +174,10 @@ static void *thr_io_close(void *arg) {
     av_log(NULL, AV_LOG_DEBUG, "thr_io_close conn_nr: %d, out_addr: %p \n", conn->nr, conn->out);
 
     ret = ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
+    response_code = ff_http_get_code(http_url_context);
     pthread_mutex_lock(&lock);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, url: %s.\n", ret, conn->nr, ff_http_get_url(http_url_context));
+    if (ret < 0 || response_code >= 500) {
+        av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, response_code: %d, url: %s.\n", ret, conn->nr, response_code, ff_http_get_url(http_url_context));
         abort_if_needed(conn->must_succeed);
         ff_format_io_close(conn->s, &conn->out);
         conn->opened = 0;
