@@ -125,6 +125,7 @@ typedef struct HTTPContext {
     int is_multi_client;
     HandshakeState handshake_step;
     int is_connected_server;
+    int64_t start_time_ms;
 } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
@@ -315,6 +316,8 @@ int ff_http_do_new_request(URLContext *h, const char *uri)
     int ret;
     char hostname1[1024], hostname2[1024], proto1[10], proto2[10];
     int port1, port2;
+
+    s->start_time_ms = av_gettime() / 1000;
 
     if (!h->prot ||
         !(!strcmp(h->prot->name, "http") ||
@@ -1623,6 +1626,8 @@ static int http_shutdown(URLContext *h, int flags)
     int ret = 0;
     char footer[] = "0\r\n\r\n";
     HTTPContext *s = h->priv_data;
+    int64_t curr_time_ms;
+    int64_t req_time_ms;
 
     /* signal end of chunked encoding if used */
     if (((flags & AVIO_FLAG_WRITE) && s->chunked_post) ||
@@ -1655,7 +1660,9 @@ static int http_shutdown(URLContext *h, int flags)
                 s->http_code = strtol(p, &end, 10);
             }
 
-            av_log(h, AV_LOG_INFO, "HTTP response: %d, - %s \n", s->http_code, s->location);
+            curr_time_ms = av_gettime() / 1000;
+            req_time_ms = curr_time_ms - s->start_time_ms;
+            av_log(h, AV_LOG_INFO, "HTTP response: %d, duration: %"PRId64", url: %s \n", s->http_code, req_time_ms, s->location);
 
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
                 ret = read_ret;
