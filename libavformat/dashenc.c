@@ -147,6 +147,7 @@ typedef struct DASHContext {
     int master_publish_rate;
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
+    int64_t start_time_ms; /* Time to use as start time, used to force segments to continue at a specific number */
 } DASHContext;
 
 static struct codec_string {
@@ -1139,7 +1140,7 @@ static int dict_copy_entry(AVDictionary **dst, const AVDictionary *src, const ch
 static int dash_init(AVFormatContext *s)
 {
     DASHContext *c = s->priv_data;
-    int ret = 0, i;
+    int ret = 0, i, seg_index;
     char *ptr;
     char basename[1024];
 
@@ -1197,6 +1198,16 @@ static int dash_init(AVFormatContext *s)
 
     if ((ret = init_segment_types(s)) < 0)
         return ret;
+
+    seg_index = 1;
+    if (c->start_time_ms != 0) {
+        int64_t time_us = av_gettime();
+        int64_t time_ms = time_us / 1000;
+        int64_t duration = time_ms - c->start_time_ms;
+        int nr_of_segments = duration / (c->seg_duration / 1000);
+        av_log(s, AV_LOG_WARNING, "nr_of_segments: %"PRId64", seg_duration: %"PRId64", c->start_time_ms: %"PRId64", duration: %"PRId64"\n", nr_of_segments, c->seg_duration, c->start_time_ms, duration);
+        seg_index = nr_of_segments+1;
+    }
 
     for (i = 0; i < s->nb_streams; i++) {
         OutputStream *os = &c->streams[i];
@@ -1346,7 +1357,8 @@ static int dash_init(AVFormatContext *s)
         os->first_pts = AV_NOPTS_VALUE;
         os->max_pts = AV_NOPTS_VALUE;
         os->last_dts = AV_NOPTS_VALUE;
-        os->segment_index = 1;
+
+        os->segment_index = seg_index;
 
         if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
             c->nr_of_streams_to_flush++;
@@ -1747,8 +1759,15 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     os->last_pts = pkt->pts;
 
     if (!c->availability_start_time[0]) {
-        int64_t start_time_us = av_gettime();
-        c->start_time_s = start_time_us / 1000000;
+        if (c->start_time_ms == 0) {
+            int64_t start_time_us = av_gettime();
+            c->start_time_ms = start_time_us / 1000;
+            av_log(s, AV_LOG_WARNING, "New start time: %"PRId64"\n", c->start_time_ms);
+        } else {
+            av_log(s, AV_LOG_WARNING, "Forced start time: %"PRId64"\n", c->start_time_ms);
+        }
+        
+        c->start_time_s = c->start_time_ms / 1000;
         format_date_now(c->availability_start_time,
                         sizeof(c->availability_start_time));
     }
@@ -1994,6 +2013,7 @@ static const AVOption options[] = {
     { "ignore_io_errors", "Ignore IO errors during open and write. Useful for long-duration runs with network output", OFFSET(ignore_io_errors), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "lhls", "Enable Low-latency HLS(Experimental). Adds #EXT-X-PREFETCH tag with current segment's URI", OFFSET(lhls), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "master_m3u8_publish_rate", "Publish master playlist every after this many segment intervals", OFFSET(master_publish_rate), AV_OPT_TYPE_INT, {.i64 = 0}, 0, UINT_MAX, E},
+    { "start_time_ms", "Time to use as start time, used to force segments to continue at a specific number ", OFFSET(start_time_ms), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, E },
     { NULL },
 };
 

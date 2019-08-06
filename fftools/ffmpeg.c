@@ -1268,8 +1268,10 @@ static void do_video_out(OutputFile *of,
             in_picture->pts >= ost->forced_kf_pts[ost->forced_kf_index]) {
             ost->forced_kf_index++;
             forced_keyframe = 1;
+            av_log(NULL, AV_LOG_WARNING, "Forced keyframe by index\n");
         } else if (ost->forced_keyframes_pexpr) {
             double res;
+            //joep
             ost->forced_keyframes_expr_const_values[FKF_T] = pts_time;
             res = av_expr_eval(ost->forced_keyframes_pexpr,
                                ost->forced_keyframes_expr_const_values, NULL);
@@ -1282,6 +1284,7 @@ static void do_video_out(OutputFile *of,
                     res);
             if (res) {
                 forced_keyframe = 1;
+                av_log(NULL, AV_LOG_WARNING, "Forced keyframe by expr\n");
                 ost->forced_keyframes_expr_const_values[FKF_PREV_FORCED_N] =
                     ost->forced_keyframes_expr_const_values[FKF_N];
                 ost->forced_keyframes_expr_const_values[FKF_PREV_FORCED_T] =
@@ -1293,12 +1296,13 @@ static void do_video_out(OutputFile *of,
         } else if (   ost->forced_keyframes
                    && !strncmp(ost->forced_keyframes, "source", 6)
                    && in_picture->key_frame==1) {
+            av_log(NULL, AV_LOG_WARNING, "Forced keyframe by other\n");
             forced_keyframe = 1;
         }
 
         if (forced_keyframe) {
             in_picture->pict_type = AV_PICTURE_TYPE_I;
-            av_log(NULL, AV_LOG_DEBUG, "Forced keyframe at time %f\n", pts_time);
+            av_log(NULL, AV_LOG_WARNING, "Forced keyframe at time %f\n", pts_time);
         }
 
         update_benchmark(NULL);
