@@ -476,7 +476,7 @@ static void write_hls_media_playlist(OutputStream *os, AVFormatContext *s,
 
     set_http_options(&http_opts, c);
     //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename_hls, &http_opts);
-    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent, 0);
+    conn_nr = pool_io_open(s, temp_filename_hls, &http_opts, c->http_persistent, 0, 0);
 
     av_dict_free(&http_opts);
     if (conn_nr < 0) {
@@ -955,7 +955,7 @@ static int write_manifest(AVFormatContext *s, int final)
     snprintf(temp_filename, sizeof(temp_filename), use_rename ? "%s.tmp" : "%s", s->url);
     set_http_options(&opts, c);
     //ret = dashenc_io_open(s, &c->mpd_out, temp_filename, &opts);
-    mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, 0);
+    mpd_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, 0, 0);
 
     av_dict_free(&opts);
     if (mpd_conn_nr < 0) {
@@ -1057,7 +1057,7 @@ static int write_manifest(AVFormatContext *s, int final)
 
         set_http_options(&opts, c);
         //ret = dashenc_io_open(s, &c->m3u8_out, temp_filename, &opts);
-        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, 0);
+        m3u8_conn_nr = pool_io_open(s, temp_filename, &opts, c->http_persistent, 0, 0);
         av_dict_free(&opts);
         if (m3u8_conn_nr < 0) {
             return handle_io_open_error(s, m3u8_conn_nr, temp_filename);
@@ -1285,7 +1285,7 @@ static int dash_init(AVFormatContext *s)
         set_http_options(&opts, c);
 
         //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
-        ret = pool_io_open(s, filename, &opts, c->http_persistent, 1);
+        ret = pool_io_open(s, filename, &opts, c->http_persistent, 1, 1);
         av_dict_free(&opts);
         if (ret < 0)
             return ret;
@@ -1842,7 +1842,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         set_http_options(&opts, c);
 
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
-        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0);
+        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0, 1);
         av_dict_free(&opts);
         os->conn_nr = ret;
         if (ret < 0) {
@@ -1872,7 +1872,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             //TODO: does this block?
             pool_write_flush(buf + os->written_len, len - os->written_len, os->conn_nr);
         } else {
-            av_log(s, AV_LOG_INFO, "Skip writing chunk because connection is not open.\n");
+            av_log(s, AV_LOG_INFO, "Skip writing chunk because connection is not available.\n");
         }
 
         os->written_len = len;

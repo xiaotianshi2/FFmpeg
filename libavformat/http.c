@@ -1922,6 +1922,7 @@ static int http_proxy_write(URLContext *h, const uint8_t *buf, int size)
 }
 
 char *ff_http_get_url(URLContext *h) {
+    //TODO: We probably do not need this anymore since conn now also has the url
     HTTPContext *s = h->priv_data;
     return s->location;
 }

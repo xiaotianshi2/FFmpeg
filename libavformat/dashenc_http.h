@@ -3,7 +3,7 @@
 
 #include "avformat.h"
 
-int pool_io_open(AVFormatContext *s, char *filename, AVDictionary **options, int http_persistent, int must_succeed);
+int pool_io_open(AVFormatContext *s, char *filename, AVDictionary **options, int http_persistent, int must_succeed, int retry);
 void pool_io_close(AVFormatContext *s, char *filename, int conn_nr);
 void pool_free_all(AVFormatContext *s);
 void pool_free(AVFormatContext *s, int conn_nr);
