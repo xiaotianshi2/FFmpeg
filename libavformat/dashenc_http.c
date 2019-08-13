@@ -43,40 +43,74 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void *thread_pool;
 
 
+/* This method expects the lock to be already done.*/
+static void release_request(connection_t *conn) {
+    int64_t release_time = av_gettime() / 1000;
+    if (conn->claimed) {
+        free(conn->url);
+        for(int i = 0; i < conn->nr_of_chunks; i++) {
+            chunk_t *chunk = conn->chunks_ptr[i];
+            free(chunk->buf);
+        }
+        av_freep(&conn->chunks_ptr);
+        av_dict_free(&conn->options);
+    }
+    conn->claimed = 0;
+    conn->release_time = release_time;
+    conn->nr_of_chunks = 0;
+    conn->chunks_done = 0;
+    conn->retry_nr = 0;
+    conn->opened_error = 0;
+}
+
+static void force_release_connection(connection_t *conn) {
+    pthread_mutex_lock(&lock);
+    conn->opened = 0;
+    release_request(conn);
+    pthread_mutex_unlock(&lock);
+}
+
 /**
  * Claims a free connection and returns the connection number.
  * Released connections are used first.
  */
-static int claim_connection(char *url) {
+static int claim_connection(char *url, int need_new_connection) {
     int64_t lowest_release_time = av_gettime() / 1000;
     int conn_nr = -1;
+    connection_t *conn;
     size_t len;
     pthread_mutex_lock(&lock);
 
     for(int i = 0; i < nr_of_connections; i++) {
-        connection_t *conn = connections[i];
-        if (!conn->claimed) {
-            if ((conn_nr == -1) || (conn->release_time != 0 && conn->release_time < lowest_release_time)) {
+        connection_t *conn_l = connections[i];
+        if (!conn_l->claimed) {
+            if ((conn_nr == -1) || (conn->release_time != 0 && conn_l->release_time < lowest_release_time)) {
                 conn_nr = i;
+                conn = conn_l;
                 lowest_release_time = conn->release_time;
             }
         }
     }
 
     if (conn_nr == -1) {
-        connection_t *new_conn = calloc(1, sizeof(*new_conn));
+        conn = calloc(1, sizeof(*conn));
         conn_nr = nr_of_connections;
         
-        av_dynarray_add(&connections, &nr_of_connections, new_conn);
+        av_dynarray_add(&connections, &nr_of_connections, conn);
         av_log(NULL, AV_LOG_INFO, "No free connections so added one. Nr of connections: %d, url: %s\n", nr_of_connections, url);
+    }
+
+    if (need_new_connection && conn->opened) {
+        conn->opened = 0;
+        ff_format_io_close(conn->s, &conn->out);
     }
 
     av_log(NULL, AV_LOG_INFO, "Claimed conn_id: %d, url: %s\n", conn_nr, url);
     len = strlen(url) + 1;
-    connections[conn_nr]->url = malloc(len);
-    av_strlcpy(connections[conn_nr]->url, url, len);
-    connections[conn_nr]->claimed = 1;
-    connections[conn_nr]->nr = conn_nr;
+    conn->url = malloc(len);
+    av_strlcpy(conn->url, url, len);
+    conn->claimed = 1;
+    conn->nr = conn_nr;
     pthread_mutex_unlock(&lock);
     return conn_nr;
 }
@@ -86,7 +120,7 @@ static int claim_connection(char *url) {
  */
 static int open_request(AVFormatContext *s, char *url, AVDictionary **options) {
     int ret;
-    int conn_nr = claim_connection(url);
+    int conn_nr = claim_connection(url, 0);
     connection_t *conn = connections[conn_nr];
 
     if (conn->opened)
@@ -101,31 +135,6 @@ static int open_request(AVFormatContext *s, char *url, AVDictionary **options) {
     return ret;
 }
 
-/* This method expects the lock to be already done */
-static void release_request(connection_t *conn) {
-    int64_t release_time = av_gettime() / 1000;
-    conn->claimed = 0;
-    conn->release_time = release_time;
-    free(conn->url);
-    for(int i = 0; i < conn->nr_of_chunks; i++) {
-        chunk_t *chunk = conn->chunks_ptr[i];
-        free(chunk->buf);
-    }
-    av_freep(&conn->chunks_ptr);
-    conn->nr_of_chunks = 0;
-    conn->chunks_done = 0;
-    conn->retry_nr = 0;
-    conn->opened_error = 0;
-    av_dict_free(&conn->options);
-}
-
-static void force_release_connection(connection_t *conn) {
-    pthread_mutex_lock(&lock);
-    conn->opened = 0;
-    release_request(conn);
-    pthread_mutex_unlock(&lock);
-}
-
 static void abort_if_needed(int mustSucceed) {
     if (mustSucceed) {
         av_log(NULL, AV_LOG_ERROR, "Abort because request needs to succeed and it did not.\n");
@@ -138,7 +147,7 @@ static void abort_if_needed(int mustSucceed) {
  * The claimed connection number is returned.
  */
 int pool_io_open(AVFormatContext *s, char *filename,
-                 AVDictionary **options, int http_persistent, int must_succeed, int retry) {
+                 AVDictionary **options, int http_persistent, int must_succeed, int retry, int need_new_connection) {
 
     int http_base_proto = filename ? ff_is_http_proto(filename) : 0;
     int ret = AVERROR_MUXER_NOT_FOUND;
@@ -154,7 +163,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
         AVDictionary *d = NULL;
 
         //claim new item from pool and open connection if needed
-        int conn_nr = claim_connection(filename);
+        int conn_nr = claim_connection(filename, need_new_connection);
         //Crash when we cannot claim a new connection. We should restart ffmpeg in this case.
         av_assert0(conn_nr >= 0);
 
@@ -238,7 +247,7 @@ static void retry(connection_t *conn) {
     
     av_log(NULL, AV_LOG_WARNING, "Starting retry for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
     retry_conn_nr = pool_io_open(conn->s, conn->url,
-                                 &conn->options, conn->http_persistent, conn->must_succeed, 1);
+                                 &conn->options, conn->http_persistent, conn->must_succeed, 1, 1);
 
     if (retry_conn_nr < 0) {
         av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n", 
