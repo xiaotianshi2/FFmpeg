@@ -56,6 +56,9 @@
         (prev_dividend) = (dividend);                                          \
     } while (0)
 
+#define PROBE_PACKET_MAX_BUF 8192
+#define PROBE_PACKET_MARGIN 5
+
 enum MpegTSFilterType {
     MPEGTS_PES,
     MPEGTS_SECTION,
@@ -594,28 +597,42 @@ static int analyze(const uint8_t *buf, int size, int packet_size,
     return best_score - FFMAX(stat_all - 10*best_score, 0)/10;
 }
 
-/* autodetect fec presence. Must have at least 1024 bytes  */
-static int get_packet_size(const uint8_t *buf, int size)
+/* autodetect fec presence */
+static int get_packet_size(AVFormatContext* s)
 {
     int score, fec_score, dvhs_score;
+    int margin;
+    int ret;
 
-    if (size < (TS_FEC_PACKET_SIZE * 5 + 1))
-        return AVERROR_INVALIDDATA;
+    /*init buffer to store stream for probing */
+    uint8_t buf[PROBE_PACKET_MAX_BUF] = {0};
+    int buf_size = 0;
 
-    score      = analyze(buf, size, TS_PACKET_SIZE,      0);
-    dvhs_score = analyze(buf, size, TS_DVHS_PACKET_SIZE, 0);
-    fec_score  = analyze(buf, size, TS_FEC_PACKET_SIZE,  0);
-    av_log(NULL, AV_LOG_TRACE, "score: %d, dvhs_score: %d, fec_score: %d \n",
-            score, dvhs_score, fec_score);
+    while (buf_size < PROBE_PACKET_MAX_BUF) {
+        ret = avio_read_partial(s->pb, buf + buf_size, PROBE_PACKET_MAX_BUF - buf_size);
+        if (ret < 0)
+            return AVERROR_INVALIDDATA;
+        buf_size += ret;
 
-    if (score > fec_score && score > dvhs_score)
-        return TS_PACKET_SIZE;
-    else if (dvhs_score > score && dvhs_score > fec_score)
-        return TS_DVHS_PACKET_SIZE;
-    else if (score < fec_score && dvhs_score < fec_score)
-        return TS_FEC_PACKET_SIZE;
-    else
-        return AVERROR_INVALIDDATA;
+        score      = analyze(buf, buf_size, TS_PACKET_SIZE,      0);
+        dvhs_score = analyze(buf, buf_size, TS_DVHS_PACKET_SIZE, 0);
+        fec_score  = analyze(buf, buf_size, TS_FEC_PACKET_SIZE,  0);
+        av_log(s, AV_LOG_TRACE, "Probe: %d, score: %d, dvhs_score: %d, fec_score: %d \n",
+            buf_size, score, dvhs_score, fec_score);
+
+        margin = mid_pred(score, fec_score, dvhs_score);
+
+        if (buf_size < PROBE_PACKET_MAX_BUF)
+            margin += PROBE_PACKET_MARGIN; /*if buffer not filled */
+
+        if (score > margin)
+            return TS_PACKET_SIZE;
+        else if (dvhs_score > margin)
+            return TS_DVHS_PACKET_SIZE;
+        else if (fec_score > margin)
+            return TS_FEC_PACKET_SIZE;
+    }
+    return AVERROR_INVALIDDATA;
 }
 
 typedef struct SectionHeader {
@@ -2113,7 +2130,7 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
     return 0;
 }
 
-static AVStream *find_matching_stream(MpegTSContext *ts, int pid,
+static AVStream *find_matching_stream(MpegTSContext *ts, int pid, unsigned int programid,
                                       int stream_identifier, int pmt_stream_idx)
 {
     AVFormatContext *s = ts->stream;
@@ -2122,6 +2139,8 @@ static AVStream *find_matching_stream(MpegTSContext *ts, int pid,
 
     for (i = 0; i < s->nb_streams; i++) {
         AVStream *st = s->streams[i];
+        if (st->program_num != programid)
+            continue;
         if (stream_identifier != -1) { /* match based on "stream identifier descriptor" if present */
             if (st->stream_identifier == stream_identifier+1) {
                 found = st;
@@ -2292,7 +2311,7 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
         if (ts->pids[pid] && ts->pids[pid]->type == MPEGTS_PES) {
             pes = ts->pids[pid]->u.pes_filter.opaque;
             if (ts->merge_pmt_versions && !pes->st) {
-                st = find_matching_stream(ts, pid, stream_identifier, i);
+                st = find_matching_stream(ts, pid, h->id, stream_identifier, i);
                 if (st) {
                     pes->st = st;
                     pes->stream_type = stream_type;
@@ -2314,7 +2333,7 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
                 mpegts_close_filter(ts, ts->pids[pid]); // wrongly added sdt filter probably
             pes = add_pes_stream(ts, pid, pcr_pid);
             if (ts->merge_pmt_versions && pes && !pes->st) {
-                st = find_matching_stream(ts, pid, stream_identifier, i);
+                st = find_matching_stream(ts, pid, h->id, stream_identifier, i);
                 if (st) {
                     pes->st = st;
                     pes->stream_type = stream_type;
@@ -2336,7 +2355,7 @@ static void pmt_cb(MpegTSFilter *filter, const uint8_t *section, int section_len
                 st = ts->stream->streams[idx];
             }
             if (ts->merge_pmt_versions && !st) {
-                st = find_matching_stream(ts, pid, stream_identifier, i);
+                st = find_matching_stream(ts, pid, h->id, stream_identifier, i);
             }
             if (!st) {
                 st = avformat_new_stream(ts->stream, NULL);
@@ -2851,7 +2870,7 @@ static int handle_packets(MpegTSContext *ts, int64_t nb_packets)
     return ret;
 }
 
-static int mpegts_probe(AVProbeData *p)
+static int mpegts_probe(const AVProbeData *p)
 {
     const int size = p->buf_size;
     int maxscore = 0;
@@ -2933,8 +2952,6 @@ static int mpegts_read_header(AVFormatContext *s)
 {
     MpegTSContext *ts = s->priv_data;
     AVIOContext *pb   = s->pb;
-    uint8_t buf[8 * 1024] = {0};
-    int len;
     int64_t pos, probesize = s->probesize;
 
     s->internal->prefer_codec_framerate = 1;
@@ -2942,10 +2959,8 @@ static int mpegts_read_header(AVFormatContext *s)
     if (ffio_ensure_seekback(pb, probesize) < 0)
         av_log(s, AV_LOG_WARNING, "Failed to allocate buffers for seekback\n");
 
-    /* read the first 8192 bytes to get packet size */
     pos = avio_tell(pb);
-    len = avio_read(pb, buf, sizeof(buf));
-    ts->raw_packet_size = get_packet_size(buf, len);
+    ts->raw_packet_size = get_packet_size(s);
     if (ts->raw_packet_size <= 0) {
         av_log(s, AV_LOG_WARNING, "Could not detect TS packet size, defaulting to non-FEC/DVHS\n");
         ts->raw_packet_size = TS_PACKET_SIZE;

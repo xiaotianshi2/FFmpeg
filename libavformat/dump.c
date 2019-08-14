@@ -320,7 +320,11 @@ static void dump_cpb(void *ctx, AVPacketSideData *sd)
     }
 
     av_log(ctx, AV_LOG_INFO,
-           "bitrate max/min/avg: %d/%d/%d buffer size: %d vbv_delay: %"PRId64,
+#if FF_API_UNSANITIZED_BITRATES
+           "bitrate max/min/avg: %d/%d/%d buffer size: %d vbv_delay: %"PRIu64,
+#else
+           "bitrate max/min/avg: %"PRId64"/%"PRId64"/%"PRId64" buffer size: %d vbv_delay: %"PRIu64,
+#endif
            cpb->max_bitrate, cpb->min_bitrate, cpb->avg_bitrate,
            cpb->buffer_size,
            cpb->vbv_delay);
@@ -547,8 +551,16 @@ static void dump_stream_format(AVFormatContext *ic, int i,
         av_log(NULL, AV_LOG_INFO, " (visual impaired)");
     if (st->disposition & AV_DISPOSITION_CLEAN_EFFECTS)
         av_log(NULL, AV_LOG_INFO, " (clean effects)");
+    if (st->disposition & AV_DISPOSITION_ATTACHED_PIC)
+        av_log(NULL, AV_LOG_INFO, " (attached pic)");
+    if (st->disposition & AV_DISPOSITION_TIMED_THUMBNAILS)
+        av_log(NULL, AV_LOG_INFO, " (timed thumbnails)");
+    if (st->disposition & AV_DISPOSITION_CAPTIONS)
+        av_log(NULL, AV_LOG_INFO, " (captions)");
     if (st->disposition & AV_DISPOSITION_DESCRIPTIONS)
         av_log(NULL, AV_LOG_INFO, " (descriptions)");
+    if (st->disposition & AV_DISPOSITION_METADATA)
+        av_log(NULL, AV_LOG_INFO, " (metadata)");
     if (st->disposition & AV_DISPOSITION_DEPENDENT)
         av_log(NULL, AV_LOG_INFO, " (dependent)");
     if (st->disposition & AV_DISPOSITION_STILL_IMAGE)

@@ -36,6 +36,7 @@
 /lcov/
 /src
 /mapfile
+/tools/python/__pycache__/
 /decklink
 /output
 /.vscode/ipch
