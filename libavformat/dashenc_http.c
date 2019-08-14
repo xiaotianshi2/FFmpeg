@@ -222,6 +222,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
 
 /**
  * This will retry a previously failed request.
+ * We assume this method is ran from one of our own threads so we can safely use usleep.
  */
 static void retry(connection_t *conn) {
     int retry_conn_nr = -1;
