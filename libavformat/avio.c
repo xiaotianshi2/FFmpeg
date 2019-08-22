@@ -402,7 +402,8 @@ static inline int retry_transfer_wrapper(URLContext *h, uint8_t *buf,
         //TODO: len is changed here, if this retry is also used for SSL_ERROR_WANT_WRITE could it cause SSL3_WRITE_PENDING: bad write retry?
         len += ret;
         if (len < size_min) {
-            av_log(h, AV_LOG_INFO, "retry_transfer_wrapper len: %d, ret: %d, size_min: %d\n", len, ret, size_min);
+            //Commented out because RTMP server is triggering this
+            //av_log(h, AV_LOG_INFO, "retry_transfer_wrapper len: %d, ret: %d, size_min: %d\n", len, ret, size_min);
         }
     }
     return len;
