@@ -35,6 +35,7 @@
 #include "libavutil/time.h"
 #include "libavutil/time_internal.h"
 #include "libavutil/time.h"
+#include <pthread.h>
 
 #include "av1.h"
 #include "avc.h"
@@ -182,6 +183,7 @@ static int64_t maxTime;
 static int64_t minTime;
 static int64_t totalTime;
 static int64_t nrOfSamples;
+static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Still being used by deleting of old files */
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
@@ -1794,6 +1796,7 @@ static void print_stats(AVPacket *pkt)
                 int64_t pTime = (curr_time - pkt_init_time) / 1000;
                 int64_t avgTime;
 
+                pthread_mutex_lock(&stats_lock);
                 nrOfSamples++;
                 totalTime += pTime;
                 if (maxTime < pTime)
@@ -1816,6 +1819,7 @@ static void print_stats(AVPacket *pkt)
                     totalTime = 0;
                     nrOfSamples = 0;
                 }
+                pthread_mutex_unlock(&stats_lock);
             }
         }
 
