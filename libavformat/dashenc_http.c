@@ -45,7 +45,7 @@ typedef struct _connection_t {
 
 static connection_t **connections = NULL; /* an array with pointers to connections */
 static int nr_of_connections = 0;
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t connections_lock = PTHREAD_MUTEX_INITIALIZER;
 static void *thread_pool;
 
 
@@ -71,10 +71,10 @@ static void release_request(connection_t *conn) {
 }
 
 static void force_release_connection(connection_t *conn) {
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&connections_lock);
     conn->opened = 0;
     release_request(conn);
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&connections_lock);
 }
 
 static void write_chunk(connection_t *conn, int chunk_nr) {
@@ -132,7 +132,7 @@ static int claim_connection(char *url, int need_new_connection) {
     int conn_nr = -1;
     connection_t *conn;
     size_t len;
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&connections_lock);
 
     for(int i = 0; i < nr_of_connections; i++) {
         connection_t *conn_l = connections[i];
@@ -174,7 +174,7 @@ static int claim_connection(char *url, int need_new_connection) {
     av_strlcpy(conn->url, url, len);
     conn->claimed = 1;
     conn->nr = conn_nr;
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&connections_lock);
     return conn_nr;
 }
 
@@ -258,9 +258,9 @@ int pool_io_open(AVFormatContext *s, char *filename,
                 return conn_nr;
             }
 
-            pthread_mutex_lock(&lock);
+            pthread_mutex_lock(&connections_lock);
             conn->opened = 1;
-            pthread_mutex_unlock(&lock);
+            pthread_mutex_unlock(&connections_lock);
             return conn_nr;
         }
 
@@ -408,17 +408,17 @@ static void *thr_io_close(void *arg) {
         av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, response_code: %d, url: %s.\n", ret, conn->nr, response_code, conn->url);
         abort_if_needed(conn->must_succeed);
         ff_format_io_close(conn->s, &conn->out);
-        pthread_mutex_lock(&lock);
+        pthread_mutex_lock(&connections_lock);
         conn->opened = 0;
-        pthread_mutex_unlock(&lock);
+        pthread_mutex_unlock(&connections_lock);
         
         if (conn->retry)
             retry(conn);
     }
 
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&connections_lock);
     release_request(conn);
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&connections_lock);
 
     return NULL;
 }
