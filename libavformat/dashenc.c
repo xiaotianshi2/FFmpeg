@@ -182,7 +182,7 @@ static int64_t minTime;
 static int64_t totalTime;
 static int64_t nrOfSamples;
 
-
+static int retry_enabled = 1;
 
 
 
@@ -1366,7 +1366,7 @@ static int dash_init(AVFormatContext *s)
                 return ret;
 
             //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
-            ret = pool_io_open(s, filename, &opts, c->http_persistent, 1, 1, 0);
+            ret = pool_io_open(s, filename, &opts, c->http_persistent, 1, retry_enabled, 0);
         } else {
             ctx->url = av_strdup(filename);
             ret = avio_open2(&ctx->pb, filename, AVIO_FLAG_WRITE, NULL, &opts);
@@ -1956,7 +1956,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         set_http_options(&opts, c);
 
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
-        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0, 1, 0);
+        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0, retry_enabled, 0);
         av_dict_free(&opts);
         os->conn_nr = ret;
         if (ret < 0) {

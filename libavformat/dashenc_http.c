@@ -14,6 +14,7 @@
 typedef struct _chunk_t {
     unsigned char *buf;
     int size;
+    int nr;
 } chunk_t;
 
 typedef struct _connection_t {
@@ -24,17 +25,22 @@ typedef struct _connection_t {
     int opened_error;     /* If 1 the connection could not be opened */
     int64_t release_time; /* Time the last request of the connection has finished */
     AVFormatContext *s;   /* Used to clean up the TCP connection if closing of a request fails */
+    pthread_t w_thread;   /* Thread that is used to write the chunks */
+    pthread_mutex_t count_mutex;
+    pthread_cond_t count_threshold_cv;
+    // int chunk_available;  /* there is a chunk available to be written */
 
     //Request specific data
-    int must_succeed;      /* If 1 the request must succeed, otherwise we'll crash the program */
-    int retry;             /* If 1 the request can be retried */
-    int retry_nr;          /* Current retry number, used to limit the nr of retries */
-    char *url;             /* url of the current request */
+    int must_succeed;       /* If 1 the request must succeed, otherwise we'll crash the program */
+    int retry;              /* If 1 the request can be retried */
+    int retry_nr;           /* Current retry number, used to limit the nr of retries */
+    char *url;              /* url of the current request */
     AVDictionary *options;
     int http_persistent;
-    chunk_t **chunks_ptr;  /* An array with pointers to chunks */
-    int nr_of_chunks;
-    int chunks_done;       /* Are all chunks for this request available in the buffer */
+    chunk_t **chunks_ptr;   /* An array with pointers to chunks */
+    int nr_of_chunks;       /* Nr of chunks available, guarded by count_mutex */
+    int chunks_done;        /* Are all chunks for this request available in the buffer */
+    int last_chunk_written; /* Last chunk number that has been written */
 } connection_t;
 
 static connection_t **connections = NULL; /* an array with pointers to connections */
@@ -61,6 +67,7 @@ static void release_request(connection_t *conn) {
     conn->chunks_done = 0;
     conn->retry_nr = 0;
     conn->opened_error = 0;
+    conn->last_chunk_written = 0;
 }
 
 static void force_release_connection(connection_t *conn) {
@@ -68,6 +75,56 @@ static void force_release_connection(connection_t *conn) {
     conn->opened = 0;
     release_request(conn);
     pthread_mutex_unlock(&lock);
+}
+
+static void write_chunk(connection_t *conn, int chunk_nr) {
+    int64_t start_time_ms;
+    int64_t write_time_ms;
+    int64_t flush_time_ms;
+    int64_t after_write_time_ms;
+
+    chunk_t *chunk = conn->chunks_ptr[chunk_nr];
+    start_time_ms = av_gettime() / 1000;
+    avio_write(conn->out, chunk->buf, chunk->size);
+    after_write_time_ms = av_gettime() / 1000;
+    write_time_ms = after_write_time_ms - start_time_ms;
+    if (write_time_ms > 100) {
+        av_log(NULL, AV_LOG_WARNING, "It took %"PRId64"(ms) to write chunk %d. conn_nr: %d\n", write_time_ms, chunk_nr, conn->nr);
+    }
+
+    avio_flush(conn->out);
+    flush_time_ms = av_gettime() / 1000 - after_write_time_ms;
+    if (flush_time_ms > 100) {
+        av_log(NULL, AV_LOG_WARNING, "It took %"PRId64"(ms) to flush chunk %d. conn_nr: %d\n", flush_time_ms, chunk_nr, conn->nr);
+    }
+}
+
+/**
+ * This method writes the chunks.
+ * It is supposed to be passed to pthread_create.
+ */
+static void *thr_io_write(void *arg) {
+    connection_t *conn = (connection_t *)arg;
+    //https://computing.llnl.gov/tutorials/pthreads/#ConditionVariables
+
+    for (;;) {
+        pthread_mutex_lock(&conn->count_mutex);
+
+        while (conn->last_chunk_written >= conn->nr_of_chunks) {
+            // printf("waiting for signal conn_nr: %d\n", conn->nr);
+            pthread_cond_wait(&conn->count_threshold_cv, &conn->count_mutex);
+            //printf("cond_wait done\n");
+        }
+        
+        pthread_mutex_unlock(&conn->count_mutex);  
+        
+        //write chunk
+        // printf("writing chunk %d, nr_of_chunks: %d\n", conn->last_chunk_written, conn->nr_of_chunks);
+        write_chunk(conn, conn->last_chunk_written);
+        conn->last_chunk_written++;
+    }
+
+    return NULL;
 }
 
 /**
@@ -95,6 +152,16 @@ static int claim_connection(char *url, int need_new_connection) {
     if (conn_nr == -1) {
         conn = calloc(1, sizeof(*conn));
         conn_nr = nr_of_connections;
+        conn->last_chunk_written = 0;
+        conn->nr_of_chunks = 0;
+        conn->nr = conn_nr;
+        pthread_mutex_init(&conn->count_mutex, NULL);
+        pthread_cond_init(&conn->count_threshold_cv, NULL);
+        
+        if(pthread_create(&conn->w_thread, NULL, thr_io_write, conn)) {
+            fprintf(stderr, "Error creating thread\n");
+            return 1;
+        }
         
         av_dynarray_add(&connections, &nr_of_connections, conn);
         av_log(NULL, AV_LOG_INFO, "No free connections so added one. Nr of connections: %d, url: %s\n", nr_of_connections, url);
@@ -220,6 +287,52 @@ int pool_io_open(AVFormatContext *s, char *filename,
     return ret;
 }
 
+
+static void write_flush(const unsigned char *buf, int size, int conn_nr, int keep_thread) {
+    connection_t *conn;
+    chunk_t *chunk;
+
+
+    if (conn_nr < 0) {
+        av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_write_flush): %d\n", conn_nr);
+        return;
+    }
+
+    conn = connections[conn_nr];
+    
+    if (!conn->opened && !conn->opened_error) {
+        av_log(NULL, AV_LOG_WARNING, "connection closed (pool_write_flush). conn_nr: %d, url: %s\n", conn_nr, conn->url);
+        return;
+    }
+
+    //Save the chunk in memory
+    chunk = malloc(sizeof(chunk_t));
+    chunk->size = size;
+    chunk->nr = conn->nr_of_chunks;
+    chunk->buf = malloc(size);
+    if (chunk->buf == NULL) {
+        av_log(NULL, AV_LOG_WARNING, "Could not malloc (pool_write_flush)\n");
+    }
+    memcpy(chunk->buf, buf, size);
+
+    pthread_mutex_lock(&conn->count_mutex);
+    av_dynarray_add(&conn->chunks_ptr, &conn->nr_of_chunks, chunk);
+    pthread_mutex_unlock(&conn->count_mutex);
+    //av_log(NULL, AV_LOG_INFO, "(%d) claimed mem: %p, addr of first chunk: %p\n", conn->nr, chunk->buf, conn->chunks_ptr[0]->buf);
+    
+    if (conn->opened_error) {
+        return;
+    }
+
+    if (keep_thread) {
+        write_chunk(conn, chunk->nr);
+    } else {
+        pthread_mutex_lock(&conn->count_mutex);
+        pthread_cond_signal(&conn->count_threshold_cv);
+        pthread_mutex_unlock(&conn->count_mutex);
+    }
+}
+
 /**
  * This will retry a previously failed request.
  * We assume this method is ran from one of our own threads so we can safely use usleep.
@@ -265,7 +378,7 @@ static void retry(connection_t *conn) {
 
     for(int i = 0; i < conn->nr_of_chunks; i++) {
         chunk_t *chunk = conn->chunks_ptr[i];
-        pool_write_flush(chunk->buf, chunk->size, retry_conn_nr);
+        write_flush(chunk->buf, chunk->size, retry_conn_nr, 1);
     }
 
     pool_io_close(retry_conn->s, retry_conn->url, retry_conn_nr);
@@ -366,41 +479,7 @@ void pool_free_all(AVFormatContext *s) {
 }
 
 void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
-    connection_t *conn;
-    chunk_t *chunk;
-
-    if (conn_nr < 0) {
-        av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_write_flush): %d\n", conn_nr);
-        return;
-    }
-
-    conn = connections[conn_nr];
-    
-    if (!conn->opened && !conn->opened_error) {
-        av_log(NULL, AV_LOG_WARNING, "connection closed (pool_write_flush). conn_nr: %d, url: %s\n", conn_nr, conn->url);
-        return;
-    }
-
-    if (conn->retry) {
-        //Save the chunk in memory so we can do retries later
-        chunk = malloc(sizeof(chunk_t));
-        chunk->size = size;
-        chunk->buf = malloc(size);
-        if (chunk->buf == NULL) {
-            av_log(NULL, AV_LOG_WARNING, "Could not malloc (pool_write_flush)\n");
-        }
-        memcpy(chunk->buf, buf, size);
-        av_dynarray_add(&conn->chunks_ptr, &conn->nr_of_chunks, chunk);
-        //av_log(NULL, AV_LOG_INFO, "(%d) claimed mem: %p, addr of first chunk: %p\n", conn->nr, chunk->buf, conn->chunks_ptr[0]->buf);
-    }
-    
-
-    if (conn->opened_error) {
-        return;
-    }
-
-    avio_write(conn->out, buf, size);
-    avio_flush(conn->out);
+    write_flush(buf, size, conn_nr, 0);
 }
 
 int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
@@ -436,3 +515,9 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
 void pool_init() {
     thread_pool = pool_start(thr_io_close, 20);
 }
+
+/*
+  TODO: cleanup?
+  pthread_mutex_destroy(&count_mutex);
+  pthread_cond_destroy(&count_threshold_cv);
+ */
