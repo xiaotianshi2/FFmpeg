@@ -44,6 +44,8 @@ RUN cd /tmp;git clone https://github.com/Netflix/vmaf.git;cd vmaf/ptools;make;cd
 # Copy the current directory contents into the container at /app
 COPY . /app
 
+RUN make clean
+
 RUN ./configure  \
     --enable-gpl \
     --enable-openssl \
