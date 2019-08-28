@@ -151,6 +151,7 @@ typedef struct DASHContext {
     int master_publish_rate;
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
+    int http_retry;
 } DASHContext;
 
 static struct codec_string {
@@ -181,10 +182,6 @@ static int64_t maxTime;
 static int64_t minTime;
 static int64_t totalTime;
 static int64_t nrOfSamples;
-
-static int retry_enabled = 1;
-
-
 
 /* Still being used by deleting of old files */
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
@@ -1366,7 +1363,7 @@ static int dash_init(AVFormatContext *s)
                 return ret;
 
             //ret = s->io_open(s, &os->out, filename, AVIO_FLAG_WRITE, &opts);
-            ret = pool_io_open(s, filename, &opts, c->http_persistent, 1, retry_enabled, 0);
+            ret = pool_io_open(s, filename, &opts, c->http_persistent, 1, c->http_retry, 0);
         } else {
             ctx->url = av_strdup(filename);
             ret = avio_open2(&ctx->pb, filename, AVIO_FLAG_WRITE, NULL, &opts);
@@ -1956,7 +1953,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         set_http_options(&opts, c);
 
         //ret = dashenc_io_open(s, &os->out, os->temp_path, &opts);
-        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0, retry_enabled, 0);
+        ret = pool_io_open(s, os->temp_path, &opts, c->http_persistent, 0, c->http_retry, 0);
         av_dict_free(&opts);
         os->conn_nr = ret;
         if (ret < 0) {
@@ -2100,6 +2097,7 @@ static const AVOption options[] = {
     { "ignore_io_errors", "Ignore IO errors during open and write. Useful for long-duration runs with network output", OFFSET(ignore_io_errors), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "lhls", "Enable Low-latency HLS(Experimental). Adds #EXT-X-PREFETCH tag with current segment's URI", OFFSET(lhls), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "master_m3u8_publish_rate", "Publish master playlist every after this many segment intervals", OFFSET(master_publish_rate), AV_OPT_TYPE_INT, {.i64 = 0}, 0, UINT_MAX, E},
+    { "http_retry", "Retry HTTP requests if they fail", OFFSET(http_retry), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { NULL },
 };
 

@@ -111,15 +111,11 @@ static void *thr_io_write(void *arg) {
         pthread_mutex_lock(&conn->count_mutex);
 
         while (conn->last_chunk_written >= conn->nr_of_chunks) {
-            // printf("waiting for signal conn_nr: %d\n", conn->nr);
             pthread_cond_wait(&conn->count_threshold_cv, &conn->count_mutex);
-            //printf("cond_wait done\n");
         }
         
         pthread_mutex_unlock(&conn->count_mutex);  
         
-        //write chunk
-        // printf("writing chunk %d, nr_of_chunks: %d\n", conn->last_chunk_written, conn->nr_of_chunks);
         write_chunk(conn, conn->last_chunk_written);
         conn->last_chunk_written++;
     }
