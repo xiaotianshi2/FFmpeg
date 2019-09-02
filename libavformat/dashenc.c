@@ -34,7 +34,6 @@
 #include "libavutil/rational.h"
 #include "libavutil/time.h"
 #include "libavutil/time_internal.h"
-#include "libavutil/time.h"
 #include <pthread.h>
 
 #include "av1.h"
@@ -52,6 +51,7 @@
 #include "vpcc.h"
 #include "dash.h"
 #include "dashenc_http.h"
+#include "dashenc_stats.h"
 
 typedef enum {
     SEGMENT_TYPE_AUTO = 0,
@@ -153,6 +153,7 @@ typedef struct DASHContext {
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
     int http_retry;
+    stats_t *time_stats;
 } DASHContext;
 
 static struct codec_string {
@@ -176,14 +177,6 @@ static struct format_string {
     { SEGMENT_TYPE_WEBM, "webm" },
     { 0, NULL }
 };
-
-// Packet/frame statistics
-static int64_t lastLog;
-static int64_t maxTime;
-static int64_t minTime;
-static int64_t totalTime;
-static int64_t nrOfSamples;
-static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Still being used by deleting of old files */
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
@@ -1447,6 +1440,8 @@ static int dash_init(AVFormatContext *s)
 
     c->nr_of_streams_flushed = 0;
 
+    c->time_stats = init_time_stats("processing", 5 * 1000000);
+
     return 0;
 }
 
@@ -1778,11 +1773,10 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
  * Print statistics to the log.
  * LLS-79
  */
-static void print_stats(AVPacket *pkt)
+static void print_stats(DASHContext *c, AVPacket *pkt)
 {
     int size;
     const uint8_t *side_data;
-    const int logInterval = 5 * 1000000;
 
     side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, &size);
     if (side_data && size) {
@@ -1791,36 +1785,18 @@ static void print_stats(AVPacket *pkt)
             AVDictionaryEntry* timeEntry = av_dict_get(dict, "init_time", NULL, 0);
             if (timeEntry) {
                 int64_t pkt_init_time = strtol(timeEntry->value, NULL, 10);
+
                 //av_gettime_relative is in microseconds
                 int64_t curr_time = av_gettime_relative();
                 int64_t pTime = (curr_time - pkt_init_time) / 1000;
-                int64_t avgTime;
 
-                pthread_mutex_lock(&stats_lock);
-                nrOfSamples++;
-                totalTime += pTime;
-                if (maxTime < pTime)
-                    maxTime = pTime;
-
-                if (minTime > pTime || minTime == 0)
-                    minTime = pTime;
-
-                if (lastLog == 0)
-                    lastLog = curr_time;
-
-                if (curr_time - lastLog > logInterval) {
-                    lastLog = curr_time;
-                    avgTime = totalTime / nrOfSamples;
-
-                    av_log(NULL, AV_LOG_INFO, "Processing time (ms) min: %"PRId64", max: %"PRId64", avg: %"PRId64", time: %"PRId64"\n", minTime, maxTime, avgTime, curr_time);
-
-                    minTime = 0;
-                    maxTime = 0;
-                    totalTime = 0;
-                    nrOfSamples = 0;
-                }
-                pthread_mutex_unlock(&stats_lock);
+                print_time_stats(c->time_stats, pTime);
+            } else {
+                av_log(c, AV_LOG_INFO, "missing packet time 1\n");
             }
+
+        } else {
+            av_log(c, AV_LOG_INFO, "missing packet time 2\n");
         }
 
         av_dict_free(&dict);
@@ -1976,7 +1952,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         int len = 0;
         uint8_t *buf = NULL;
 
-        print_stats(pkt);
+        print_stats(c, pkt);
 
         if (!os->written_len)
             write_styp(os->ctx->pb);

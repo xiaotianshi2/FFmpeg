@@ -7,6 +7,7 @@
 #include "avio_internal.h"
 #include "utils.c"
 #include "dashenc_pool.h"
+#include "dashenc_stats.h"
 #if CONFIG_HTTP_PROTOCOL
 #include "http.h"
 #endif
@@ -28,7 +29,6 @@ typedef struct _connection_t {
     pthread_t w_thread;   /* Thread that is used to write the chunks */
     pthread_mutex_t count_mutex;
     pthread_cond_t count_threshold_cv;
-    // int chunk_available;  /* there is a chunk available to be written */
 
     //Request specific data
     int must_succeed;       /* If 1 the request must succeed, otherwise we'll crash the program */
@@ -47,6 +47,7 @@ static connection_t **connections = NULL; /* an array with pointers to connectio
 static int nr_of_connections = 0;
 static pthread_mutex_t connections_lock = PTHREAD_MUTEX_INITIALIZER;
 static void *thread_pool;
+static stats_t *time_stats;
 
 
 /* This method expects the lock to be already done.*/
@@ -97,6 +98,8 @@ static void write_chunk(connection_t *conn, int chunk_nr) {
     if (flush_time_ms > 100) {
         av_log(NULL, AV_LOG_WARNING, "It took %"PRId64"(ms) to flush chunk %d. conn_nr: %d\n", flush_time_ms, chunk_nr, conn->nr);
     }
+
+    print_time_stats(time_stats, av_gettime() / 1000 - start_time_ms);
 }
 
 /**
@@ -113,9 +116,9 @@ static void *thr_io_write(void *arg) {
         while (conn->last_chunk_written >= conn->nr_of_chunks) {
             pthread_cond_wait(&conn->count_threshold_cv, &conn->count_mutex);
         }
-        
-        pthread_mutex_unlock(&conn->count_mutex);  
-        
+
+        pthread_mutex_unlock(&conn->count_mutex);
+
         write_chunk(conn, conn->last_chunk_written);
         conn->last_chunk_written++;
     }
@@ -153,12 +156,12 @@ static int claim_connection(char *url, int need_new_connection) {
         conn->nr = conn_nr;
         pthread_mutex_init(&conn->count_mutex, NULL);
         pthread_cond_init(&conn->count_threshold_cv, NULL);
-        
+
         if(pthread_create(&conn->w_thread, NULL, thr_io_write, conn)) {
             fprintf(stderr, "Error creating thread\n");
             return 1;
         }
-        
+
         av_dynarray_add(&connections, &nr_of_connections, conn);
         av_log(NULL, AV_LOG_INFO, "No free connections so added one. Nr of connections: %d, url: %s\n", nr_of_connections, url);
     }
@@ -246,7 +249,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
         conn->http_persistent = http_persistent;
         if (!conn->opened) {
             av_log(s, AV_LOG_INFO, "Connection(%d) not yet open %s\n", conn_nr, filename);
-            
+
             ret = s->io_open(s, &(conn->out), filename, AVIO_FLAG_WRITE, options);
             if (ret < 0) {
                 av_log(s, AV_LOG_WARNING, "Could not open %s\n", filename);
@@ -295,7 +298,7 @@ static void write_flush(const unsigned char *buf, int size, int conn_nr, int kee
     }
 
     conn = connections[conn_nr];
-    
+
     if (!conn->opened && !conn->opened_error) {
         av_log(NULL, AV_LOG_WARNING, "connection closed (pool_write_flush). conn_nr: %d, url: %s\n", conn_nr, conn->url);
         return;
@@ -315,7 +318,7 @@ static void write_flush(const unsigned char *buf, int size, int conn_nr, int kee
     av_dynarray_add(&conn->chunks_ptr, &conn->nr_of_chunks, chunk);
     pthread_mutex_unlock(&conn->count_mutex);
     //av_log(NULL, AV_LOG_INFO, "(%d) claimed mem: %p, addr of first chunk: %p\n", conn->nr, chunk->buf, conn->chunks_ptr[0]->buf);
-    
+
     if (conn->opened_error) {
         return;
     }
@@ -339,28 +342,28 @@ static void retry(connection_t *conn) {
     int chunk_wait_timeout = 10;
 
     if (conn->retry_nr > 10) {
-        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n", 
+        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n",
                conn->url, retry_conn_nr, conn->retry_nr, conn->nr);
         return;
     }
 
     usleep(1 * 1000000);
-    
+
     // Wait until all chunks are recorded
     while (!conn->chunks_done && chunk_wait_timeout > 0) {
         usleep(1 * 1000000);
         chunk_wait_timeout --;
     }
     if (!conn->chunks_done) {
-        av_log(NULL, AV_LOG_ERROR, "Retry could not collect all chunks for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);    
+        av_log(NULL, AV_LOG_ERROR, "Retry could not collect all chunks for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
     }
-    
+
     av_log(NULL, AV_LOG_WARNING, "Starting retry for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
     retry_conn_nr = pool_io_open(conn->s, conn->url,
                                  &conn->options, conn->http_persistent, conn->must_succeed, 1, 1);
 
     if (retry_conn_nr < 0) {
-        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n", 
+        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n",
                conn->url, retry_conn_nr, conn->retry_nr, conn->nr);
 
         conn->retry_nr = conn->retry_nr + 1;
@@ -403,7 +406,7 @@ static void *thr_io_close(void *arg) {
         ret = ffurl_shutdown(http_url_context, AVIO_FLAG_WRITE);
         response_code = ff_http_get_code(http_url_context);
     }
-    
+
     if (ret < 0 || response_code >= 500) {
         av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, response_code: %d, url: %s.\n", ret, conn->nr, response_code, conn->url);
         abort_if_needed(conn->must_succeed);
@@ -411,7 +414,7 @@ static void *thr_io_close(void *arg) {
         pthread_mutex_lock(&connections_lock);
         conn->opened = 0;
         pthread_mutex_unlock(&connections_lock);
-        
+
         if (conn->retry)
             retry(conn);
     }
@@ -510,6 +513,7 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
 
 void pool_init() {
     thread_pool = pool_start(thr_io_close, 20);
+    time_stats = init_time_stats("chunk_write", 5 * 1000000);
 }
 
 /*
