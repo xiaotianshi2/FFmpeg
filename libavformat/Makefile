@@ -6,6 +6,7 @@ HEADERS = avformat.h                                                    \
           version.h                                                     \
           dashenc_http.h                                                \
           dashenc_pool.h                                                \
+          dashenc_stats.h                                               \
 
 OBJS = allformats.o         \
        avio.o               \
@@ -145,7 +146,7 @@ OBJS-$(CONFIG_CONCAT_DEMUXER)            += concatdec.o
 OBJS-$(CONFIG_CRC_MUXER)                 += crcenc.o
 OBJS-$(CONFIG_DATA_DEMUXER)              += rawdec.o
 OBJS-$(CONFIG_DATA_MUXER)                += rawenc.o
-OBJS-$(CONFIG_DASH_MUXER)                += dash.o dashenc.o dashenc_http.o dashenc_pool.o hlsplaylist.o
+OBJS-$(CONFIG_DASH_MUXER)                += dash.o dashenc.o dashenc_http.o dashenc_pool.o dashenc_stats.o hlsplaylist.o
 OBJS-$(CONFIG_DASH_DEMUXER)              += dash.o dashdec.o
 OBJS-$(CONFIG_DAUD_DEMUXER)              += dauddec.o
 OBJS-$(CONFIG_DAUD_MUXER)                += daudenc.o
