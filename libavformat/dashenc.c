@@ -1440,7 +1440,7 @@ static int dash_init(AVFormatContext *s)
 
     c->nr_of_streams_flushed = 0;
 
-    c->time_stats = init_time_stats("processing", 5 * 1000000);
+    c->time_stats = init_time_stats("Processing time", 5 * 1000000);
 
     return 0;
 }
