@@ -97,6 +97,11 @@ static void write_chunk(connection_t *conn, int chunk_nr) {
     chunk = conn->chunks_ptr[chunk_nr];
     pthread_mutex_unlock(&conn->count_mutex);
 
+    if (!conn->out) {
+        av_log(NULL, AV_LOG_WARNING, "Connection not open so skip avio_write. Chunk_nr: %d, conn_nr: %d, url: %s\n", chunk_nr, conn->nr, conn->url);
+        return;
+    }
+
     start_time_ms = av_gettime() / 1000;
     if (chunk_nr > 282 || chunk->size > 50000) {
         av_log(NULL, AV_LOG_WARNING, "chunk issue? chunk_nr: %d, conn_nr: %d, size: %d\n", chunk_nr, conn->nr, chunk->size);
@@ -178,14 +183,18 @@ static void retry(connection_t *conn) {
     int retry_conn_nr = -1;
     connection_t *retry_conn;
     int chunk_wait_timeout = 10;
+    int conn_open_error = 0;
 
     if (conn->retry_nr > 10) {
-        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n",
-               conn->url, retry_conn_nr, conn->retry_nr, conn->nr);
+        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, attempt: %d, orig conn_nr: %d.\n",
+               conn->url, conn->retry_nr, conn->nr);
         return;
     }
 
     usleep(1 * 1000000);
+
+    av_log(NULL, AV_LOG_INFO, "Request retry waiting for segment to be completely recorded. request: %s, attempt: %d, orig conn_nr: %d.\n",
+        conn->url, conn->retry_nr, conn->nr);
 
     // Wait until all chunks are recorded
     while (!conn->chunks_done && chunk_wait_timeout > 0) {
@@ -200,7 +209,16 @@ static void retry(connection_t *conn) {
     retry_conn_nr = pool_io_open(conn->s, conn->url,
                                  &conn->options, conn->http_persistent, conn->must_succeed, 1, 1);
 
-    if (retry_conn_nr < 0) {
+    if (retry_conn_nr >= 0) {
+        retry_conn = connections[retry_conn_nr];
+        if (retry_conn->opened_error) {
+            conn_open_error = 1;
+        }
+    } else {
+        conn_open_error = 1;
+    }
+
+    if (conn_open_error) {
         av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n",
                conn->url, retry_conn_nr, conn->retry_nr, conn->nr);
 
@@ -334,8 +352,8 @@ static int claim_connection(char *url, int need_new_connection) {
         pthread_cond_init(&conn->count_threshold_cv, NULL);
 
         if(pthread_create(&conn->w_thread, NULL, thr_io_write, conn)) {
-            fprintf(stderr, "Error creating thread\n");
-            return 1;
+            av_log(NULL, AV_LOG_ERROR, "Error creating thread so abort.\n");
+            abort();
         }
 
         av_dynarray_add(&connections, &nr_of_connections, conn);
