@@ -47,6 +47,7 @@ static connection_t **connections = NULL; /* an array with pointers to connectio
 static int nr_of_connections = 0;
 static pthread_mutex_t connections_lock = PTHREAD_MUTEX_INITIALIZER;
 static stats_t *time_stats;
+static stats_t *conn_count_stats;
 
 
 /* This method expects the lock to be already done.*/
@@ -128,6 +129,7 @@ static void write_chunk(connection_t *conn, int chunk_nr) {
     }
 
     print_time_stats(time_stats, av_gettime() / 1000 - start_time_ms);
+    print_time_stats(conn_count_stats, nr_of_connections);
 }
 
 static void write_flush(const unsigned char *buf, int size, int conn_nr, int keep_thread) {
@@ -562,7 +564,8 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
 }
 
 void pool_init() {
-    time_stats = init_time_stats("Chunk write time", 5 * 1000000);
+    time_stats = init_time_stats("Chunk write time (ms)", 5 * 1000000);
+    conn_count_stats = init_time_stats("Nr of connections:", 5 * 1000000);
 }
 
 /*

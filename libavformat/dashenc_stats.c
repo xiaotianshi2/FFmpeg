@@ -31,7 +31,7 @@ void print_time_stats(stats_t *stats, int64_t value)
         stats->lastLog = curr_time;
         avgTime = stats->totalTime / stats->nrOfSamples;
 
-        av_log(NULL, AV_LOG_INFO, "%s (ms) min: %"PRId64", max: %"PRId64", avg: %"PRId64", time: %"PRId64"\n",
+        av_log(NULL, AV_LOG_INFO, "%s min: %"PRId64", max: %"PRId64", avg: %"PRId64", time: %"PRId64"\n",
             stats->name,
             stats->minTime,
             stats->maxTime,
