@@ -4,9 +4,9 @@
 set -e
 
 # Build
-docker exec -it exmg-lls-container make -j4
-docker cp exmg-lls-container:/app/ffmpeg ffmpeg
-docker cp exmg-lls-container:/app/ffmpeg_g ffmpeg_g
+# docker exec -it exmg-lls-container make -j4
+# docker cp exmg-lls-container:/app/ffmpeg ffmpeg
+# docker cp exmg-lls-container:/app/ffmpeg_g ffmpeg_g
 
 # Deploy
 version_file="version"
