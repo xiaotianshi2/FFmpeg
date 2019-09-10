@@ -562,7 +562,7 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
 }
 
 void pool_init() {
-    time_stats = init_time_stats("chunk_write", 5 * 1000000);
+    time_stats = init_time_stats("Chunk write time", 5 * 1000000);
 }
 
 /*
