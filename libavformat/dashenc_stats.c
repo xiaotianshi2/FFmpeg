@@ -48,7 +48,7 @@ void print_time_stats(stats_t *stats, int64_t value)
 
 stats_t *init_time_stats(const char *name, int logInterval)
 {
-    stats_t *stats = calloc(1, sizeof(struct _stats_t));
+    stats_t *stats = calloc(1, sizeof(struct stats_t));
     stats->logInterval = logInterval;
     stats->name = name;
     pthread_mutex_init(&stats->stats_lock, NULL);

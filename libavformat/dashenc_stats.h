@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include "avformat.h"
 
-typedef struct _stats_t {
+typedef struct stats_t {
     int64_t lastLog;
     int64_t maxTime;
     int64_t minTime;

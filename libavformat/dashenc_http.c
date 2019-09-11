@@ -12,13 +12,13 @@
 #include "http.h"
 #endif
 
-typedef struct _chunk_t {
+typedef struct chunk_t {
     unsigned char *buf;
     int size;
     int nr;
 } chunk_t;
 
-typedef struct _connection_t {
+typedef struct connection_t {
     int nr;               /* Number of the connection, used to lookup this connection in the connections list */
     AVIOContext *out;     /* The TCP connection */
     int claimed;          /* This connection is claimed for a specific request */
@@ -29,6 +29,7 @@ typedef struct _connection_t {
     pthread_t w_thread;   /* Thread that is used to write the chunks */
     pthread_mutex_t count_mutex;
     pthread_cond_t count_threshold_cv;
+    struct connection_t *next; /* Pointer to the next connection in the list */
 
     //Request specific data
     int must_succeed;       /* If 1 the request must succeed, otherwise we'll crash the program */
@@ -43,7 +44,8 @@ typedef struct _connection_t {
     int last_chunk_written; /* Last chunk number that has been written */
 } connection_t;
 
-static connection_t **connections = NULL; /* an array with pointers to connections */
+static connection_t *connections = NULL; /* an array with pointers to connections */
+static connection_t *connections_tail = NULL;
 static int nr_of_connections = 0;
 static pthread_mutex_t connections_lock = PTHREAD_MUTEX_INITIALIZER;
 static stats_t *time_stats;
@@ -132,6 +134,24 @@ static void write_chunk(connection_t *conn, int chunk_nr) {
     print_time_stats(conn_count_stats, nr_of_connections);
 }
 
+static connection_t *get_conn(int conn_nr) {
+
+    connection_t *iterator = connections;
+    while (1)
+    {
+        if (iterator->nr == conn_nr) {
+            return iterator;
+        }
+
+        if (iterator->next == NULL) {
+            av_log(NULL, AV_LOG_ERROR, "connection %d not found.\n", conn_nr);
+            abort();
+        }
+
+        iterator = iterator->next;
+    }
+}
+
 static void write_flush(const unsigned char *buf, int size, int conn_nr, int keep_thread) {
     connection_t *conn;
     chunk_t *chunk;
@@ -142,7 +162,7 @@ static void write_flush(const unsigned char *buf, int size, int conn_nr, int kee
         return;
     }
 
-    conn = connections[conn_nr];
+    conn = get_conn(conn_nr);
 
     if (!conn->opened && !conn->opened_error) {
         av_log(NULL, AV_LOG_WARNING, "connection closed (pool_write_flush). conn_nr: %d, url: %s\n", conn_nr, conn->url);
@@ -212,7 +232,7 @@ static void retry(connection_t *conn) {
                                  &conn->options, conn->http_persistent, conn->must_succeed, 1, 1);
 
     if (retry_conn_nr >= 0) {
-        retry_conn = connections[retry_conn_nr];
+        retry_conn = get_conn(retry_conn_nr);
         if (retry_conn->opened_error) {
             conn_open_error = 1;
         }
@@ -230,7 +250,7 @@ static void retry(connection_t *conn) {
         return;
     }
 
-    retry_conn = connections[retry_conn_nr];
+    retry_conn = get_conn(retry_conn_nr);
     retry_conn->retry_nr = conn->retry_nr + 1;
 
     for(int i = 0; i < conn->nr_of_chunks; i++) {
@@ -334,7 +354,7 @@ static int claim_connection(char *url, int need_new_connection) {
     pthread_mutex_lock(&connections_lock);
 
     for(int i = 0; i < nr_of_connections; i++) {
-        connection_t *conn_l = connections[i];
+        connection_t *conn_l = get_conn(i);
         if (!conn_l->claimed) {
             if ((conn_nr == -1) || (conn->release_time != 0 && conn_l->release_time < lowest_release_time)) {
                 conn_nr = i;
@@ -350,6 +370,8 @@ static int claim_connection(char *url, int need_new_connection) {
         conn->last_chunk_written = 0;
         conn->nr_of_chunks = 0;
         conn->nr = conn_nr;
+        conn->next = NULL;
+        nr_of_connections++;
         pthread_mutex_init(&conn->count_mutex, NULL);
         pthread_cond_init(&conn->count_threshold_cv, NULL);
 
@@ -358,7 +380,15 @@ static int claim_connection(char *url, int need_new_connection) {
             abort();
         }
 
-        av_dynarray_add(&connections, &nr_of_connections, conn);
+        if (connections_tail == NULL) {
+            connections = conn;
+            connections_tail = conn;
+            connections_tail->next = NULL;
+        } else {
+            connections_tail->next = conn;
+            connections_tail = conn;
+        }
+
         av_log(NULL, AV_LOG_INFO, "No free connections so added one. Nr of connections: %d, url: %s\n", nr_of_connections, url);
     }
 
@@ -383,7 +413,7 @@ static int claim_connection(char *url, int need_new_connection) {
 static int open_request(AVFormatContext *s, char *url, AVDictionary **options) {
     int ret;
     int conn_nr = claim_connection(url, 0);
-    connection_t *conn = connections[conn_nr];
+    connection_t *conn = get_conn(conn_nr);
 
     if (conn->opened)
         av_log(s, AV_LOG_WARNING, "open_request while connection might be open. This is TODO for when not using persistent connections. conn_nr: %d\n", conn_nr);
@@ -423,7 +453,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
         //Crash when we cannot claim a new connection. We should restart ffmpeg in this case.
         av_assert0(conn_nr >= 0);
 
-        conn = connections[conn_nr];
+        conn = get_conn(conn_nr);
         conn->must_succeed = must_succeed;
         conn->retry = retry;
         conn->s = s;
@@ -487,7 +517,7 @@ void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
         return;
     }
 
-    conn = connections[conn_nr];
+    conn = get_conn(conn_nr);
     av_log(NULL, AV_LOG_DEBUG, "pool_io_close conn_nr: %d, nr_of_chunks: %d\n", conn_nr, conn->nr_of_chunks);
 
     if (!conn->opened && !conn->opened_error) {
@@ -511,7 +541,7 @@ void pool_free(AVFormatContext *s, int conn_nr) {
         return;
     }
 
-    conn = connections[conn_nr];
+    conn = get_conn(conn_nr);
     av_log(NULL, AV_LOG_DEBUG, "pool_free conn_nr: %d\n", conn_nr);
 
     ff_format_io_close(s, &conn->out);
@@ -523,7 +553,7 @@ void pool_free_all(AVFormatContext *s) {
 
     av_log(NULL, AV_LOG_DEBUG, "pool_free_all\n");
     for(int i = 0; i < nr_of_connections; i++) {
-        conn = connections[i];
+        conn = get_conn(i);
         if (conn->out)
             pool_free(s, i);
     }
@@ -540,7 +570,7 @@ int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
         av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_avio_write)\n");
         return -1;
     }
-    conn = connections[conn_nr];
+    conn = get_conn(conn_nr);
 
     if (conn->out)
         avio_write(conn->out, buf, size);
@@ -559,7 +589,7 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
         av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_get_context)\n");
         return;
     }
-    conn = connections[conn_nr];
+    conn = get_conn(conn_nr);
     *out = conn->out;
 }
 
