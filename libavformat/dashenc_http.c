@@ -12,13 +12,13 @@
 #include "http.h"
 #endif
 
-typedef struct chunk_t {
+typedef struct chunk {
     unsigned char *buf;
     int size;
     int nr;
-} chunk_t;
+} chunk;
 
-typedef struct connection_t {
+typedef struct connection {
     int nr;               /* Number of the connection, used to lookup this connection in the connections list */
     AVIOContext *out;     /* The TCP connection */
     int claimed;          /* This connection is claimed for a specific request */
@@ -29,7 +29,7 @@ typedef struct connection_t {
     pthread_t w_thread;   /* Thread that is used to write the chunks */
     pthread_mutex_t count_mutex;
     pthread_cond_t count_threshold_cv;
-    struct connection_t *next; /* Pointer to the next connection in the list */
+    struct connection *next; /* Pointer to the next connection in the list */
 
     //Request specific data
     int must_succeed;       /* If 1 the request must succeed, otherwise we'll crash the program */
@@ -38,28 +38,28 @@ typedef struct connection_t {
     char *url;              /* url of the current request */
     AVDictionary *options;
     int http_persistent;
-    chunk_t **chunks_ptr;   /* An array with pointers to chunks */
+    chunk **chunks_ptr;   /* An array with pointers to chunks */
     int nr_of_chunks;       /* Nr of chunks available, guarded by count_mutex */
     int chunks_done;        /* Are all chunks for this request available in the buffer */
     int last_chunk_written; /* Last chunk number that has been written */
-} connection_t;
+} connection;
 
-static connection_t *connections = NULL; /* an array with pointers to connections */
-static connection_t *connections_tail = NULL;
+static connection *connections = NULL; /* an array with pointers to connections */
+static connection *connections_tail = NULL;
 static int nr_of_connections = 0;
 static pthread_mutex_t connections_lock = PTHREAD_MUTEX_INITIALIZER;
-static stats_t *time_stats;
-static stats_t *conn_count_stats;
+static stats *time_stats;
+static stats *conn_count_stats;
 
 
 /* This method expects the lock to be already done.*/
-static void release_request(connection_t *conn) {
+static void release_request(connection *conn) {
     int64_t release_time = av_gettime() / 1000;
     if (conn->claimed) {
         free(conn->url);
         pthread_mutex_lock(&conn->count_mutex);
         for(int i = 0; i < conn->nr_of_chunks; i++) {
-            chunk_t *chunk = conn->chunks_ptr[i];
+            chunk *chunk = conn->chunks_ptr[i];
             free(chunk->buf);
         }
         av_freep(&conn->chunks_ptr);
@@ -82,19 +82,19 @@ static void abort_if_needed(int mustSucceed) {
     }
 }
 
-static void force_release_connection(connection_t *conn) {
+static void force_release_connection(connection *conn) {
     pthread_mutex_lock(&connections_lock);
     conn->opened = 0;
     release_request(conn);
     pthread_mutex_unlock(&connections_lock);
 }
 
-static void write_chunk(connection_t *conn, int chunk_nr) {
+static void write_chunk(connection *conn, int chunk_nr) {
     int64_t start_time_ms;
     int64_t write_time_ms;
     int64_t flush_time_ms;
     int64_t after_write_time_ms;
-    chunk_t *chunk;
+    chunk *chunk;
 
     pthread_mutex_lock(&conn->count_mutex);
     chunk = conn->chunks_ptr[chunk_nr];
@@ -134,9 +134,9 @@ static void write_chunk(connection_t *conn, int chunk_nr) {
     print_time_stats(conn_count_stats, nr_of_connections);
 }
 
-static connection_t *get_conn(int conn_nr) {
+static connection *get_conn(int conn_nr) {
 
-    connection_t *iterator = connections;
+    connection *iterator = connections;
     while (1)
     {
         if (iterator->nr == conn_nr) {
@@ -153,8 +153,8 @@ static connection_t *get_conn(int conn_nr) {
 }
 
 static void write_flush(const unsigned char *buf, int size, int conn_nr, int keep_thread) {
-    connection_t *conn;
-    chunk_t *chunk;
+    connection *conn;
+    chunk *chunk;
 
 
     if (conn_nr < 0) {
@@ -170,7 +170,7 @@ static void write_flush(const unsigned char *buf, int size, int conn_nr, int kee
     }
 
     //Save the chunk in memory
-    chunk = malloc(sizeof(chunk_t));
+    chunk = malloc(sizeof(chunk));
     chunk->size = size;
     chunk->nr = conn->nr_of_chunks;
     chunk->buf = malloc(size);
@@ -201,9 +201,9 @@ static void write_flush(const unsigned char *buf, int size, int conn_nr, int kee
  * This will retry a previously failed request.
  * We assume this method is ran from one of our own threads so we can safely use usleep.
  */
-static void retry(connection_t *conn) {
+static void retry(connection *conn) {
     int retry_conn_nr = -1;
-    connection_t *retry_conn;
+    connection *retry_conn;
     int chunk_wait_timeout = 10;
     int conn_open_error = 0;
 
@@ -254,7 +254,7 @@ static void retry(connection_t *conn) {
     retry_conn->retry_nr = conn->retry_nr + 1;
 
     for(int i = 0; i < conn->nr_of_chunks; i++) {
-        chunk_t *chunk;
+        chunk *chunk;
         pthread_mutex_lock(&conn->count_mutex);
         chunk = conn->chunks_ptr[i];
         pthread_mutex_unlock(&conn->count_mutex);
@@ -270,7 +270,7 @@ static void retry(connection_t *conn) {
  * This method closes the request and reads the response.
  */
 static void *thr_io_close(void *arg) {
-    connection_t *conn = (connection_t *)arg;
+    connection *conn = (connection *)arg;
     int ret;
     int response_code;
 
@@ -314,7 +314,7 @@ static void *thr_io_close(void *arg) {
  * It is supposed to be passed to pthread_create.
  */
 static void *thr_io_write(void *arg) {
-    connection_t *conn = (connection_t *)arg;
+    connection *conn = (connection *)arg;
     //https://computing.llnl.gov/tutorials/pthreads/#ConditionVariables
 
     for (;;) {
@@ -349,12 +349,12 @@ static void *thr_io_write(void *arg) {
 static int claim_connection(char *url, int need_new_connection) {
     int64_t lowest_release_time = av_gettime() / 1000;
     int conn_nr = -1;
-    connection_t *conn;
+    connection *conn;
     size_t len;
     pthread_mutex_lock(&connections_lock);
 
     for(int i = 0; i < nr_of_connections; i++) {
-        connection_t *conn_l = get_conn(i);
+        connection *conn_l = get_conn(i);
         if (!conn_l->claimed) {
             if ((conn_nr == -1) || (conn->release_time != 0 && conn_l->release_time < lowest_release_time)) {
                 conn_nr = i;
@@ -413,7 +413,7 @@ static int claim_connection(char *url, int need_new_connection) {
 static int open_request(AVFormatContext *s, char *url, AVDictionary **options) {
     int ret;
     int conn_nr = claim_connection(url, 0);
-    connection_t *conn = get_conn(conn_nr);
+    connection *conn = get_conn(conn_nr);
 
     if (conn->opened)
         av_log(s, AV_LOG_WARNING, "open_request while connection might be open. This is TODO for when not using persistent connections. conn_nr: %d\n", conn_nr);
@@ -444,7 +444,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
         av_log(s, AV_LOG_WARNING, "Non HTTP request %s\n", filename);
 #if CONFIG_HTTP_PROTOCOL
     } else {
-        connection_t *conn;
+        connection *conn;
         URLContext *http_url_context;
         AVDictionary *d = NULL;
 
@@ -510,7 +510,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
  * Closes the request.
  */
 void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
-    connection_t *conn;
+    connection *conn;
 
     if (conn_nr < 0) {
         av_log(s, AV_LOG_WARNING, "Invalid conn_nr (pool_io_close) for filename: %s\n", filename);
@@ -534,7 +534,7 @@ void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
 }
 
 void pool_free(AVFormatContext *s, int conn_nr) {
-    connection_t *conn;
+    connection *conn;
 
     if (conn_nr < 0) {
         av_log(s, AV_LOG_WARNING, "Invalid conn_nr (pool_free)\n");
@@ -549,7 +549,7 @@ void pool_free(AVFormatContext *s, int conn_nr) {
 }
 
 void pool_free_all(AVFormatContext *s) {
-    connection_t *conn;
+    connection *conn;
 
     av_log(NULL, AV_LOG_DEBUG, "pool_free_all\n");
     for(int i = 0; i < nr_of_connections; i++) {
@@ -564,7 +564,7 @@ void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
 }
 
 int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
-    connection_t *conn;
+    connection *conn;
 
     if (conn_nr < 0) {
         av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_avio_write)\n");
@@ -583,7 +583,7 @@ int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
  */
 void pool_get_context(AVIOContext **out, int conn_nr) {
     //TODO we probably don't want to expose the AVIOContext
-    connection_t *conn;
+    connection *conn;
 
     if (conn_nr < 0) {
         av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_get_context)\n");

@@ -153,7 +153,7 @@ typedef struct DASHContext {
     int nr_of_streams_to_flush;
     int nr_of_streams_flushed;
     int http_retry;
-    stats_t *time_stats;
+    stats *time_stats;
 } DASHContext;
 
 static struct codec_string {

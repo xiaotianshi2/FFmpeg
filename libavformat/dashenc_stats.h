@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include "avformat.h"
 
-typedef struct stats_t {
+typedef struct stats {
     int64_t lastLog;
     int64_t maxTime;
     int64_t minTime;
@@ -13,10 +13,10 @@ typedef struct stats_t {
     int logInterval;
     const char *name;
     pthread_mutex_t stats_lock;
-} stats_t;
+} stats;
 
-void print_time_stats(stats_t *stats, int64_t value);
-stats_t *init_time_stats(const char *name, int logInterval);
-void free_time_stats(stats_t *stats);
+void print_time_stats(stats *stats, int64_t value);
+stats *init_time_stats(const char *name, int logInterval);
+void free_time_stats(stats *stats);
 
 #endif /* AVFORMAT_DASH_HTTP_H */

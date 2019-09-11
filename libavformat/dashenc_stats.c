@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include "libavutil/time.h"
 
-void print_time_stats(stats_t *stats, int64_t value)
+void print_time_stats(stats *stats, int64_t value)
 {
     int64_t avgTime;
     int64_t curr_time = av_gettime_relative();
@@ -46,16 +46,16 @@ void print_time_stats(stats_t *stats, int64_t value)
     pthread_mutex_unlock(&stats->stats_lock);
 }
 
-stats_t *init_time_stats(const char *name, int logInterval)
+stats *init_time_stats(const char *name, int logInterval)
 {
-    stats_t *stats = calloc(1, sizeof(struct stats_t));
+    stats *stats = calloc(1, sizeof(struct stats));
     stats->logInterval = logInterval;
     stats->name = name;
     pthread_mutex_init(&stats->stats_lock, NULL);
     return stats;
 }
 
-void free_time_stats(stats_t *stats)
+void free_time_stats(stats *stats)
 {
     pthread_mutex_destroy(&stats->stats_lock);
 }
