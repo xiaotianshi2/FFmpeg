@@ -19,20 +19,20 @@ typedef struct chunk {
 } chunk;
 
 typedef struct connection {
-    int nr;               /* Number of the connection, used to lookup this connection in the connections list */
-    AVIOContext *out;     /* The TCP connection */
-    int claimed;          /* This connection is claimed for a specific request */
-    int opened;           /* TCP connection (out) is opened */
-    int opened_error;     /* If 1 the connection could not be opened */
-    int64_t release_time; /* Time the last request of the connection has finished */
-    AVFormatContext *s;   /* Used to clean up the TCP connection if closing of a request fails */
-    pthread_t w_thread;   /* Thread that is used to write the chunks */
+    int nr;                  /* Number of the connection, used to lookup this connection in the connections list */
+    AVIOContext *out;        /* The TCP connection */
+    int claimed;             /* This connection is claimed for a specific request */
+    int opened;              /* TCP connection (out) is opened */
+    int opened_error;        /* If 1 the connection could not be opened */
+    int64_t release_time;    /* Time the last request of the connection has finished */
+    AVFormatContext *s;      /* Used to clean up the TCP connection if closing of a request fails */
+    pthread_t w_thread;      /* Thread that is used to write the chunks */
     struct connection *next; /* Pointer to the next connection in the list */
     struct connection *prev; /* Pointer to the previous connection in the list */
 
     //Request data that is not cleaned between requests
-    pthread_mutex_t count_mutex;
-    pthread_cond_t count_threshold_cv;
+    pthread_mutex_t chunks_mutex;
+    pthread_cond_t chunks_mutex_cv;
 
     //Request specific data
     int must_succeed;       /* If 1 the request must succeed, otherwise we'll crash the program */
@@ -42,7 +42,7 @@ typedef struct connection {
     AVDictionary *options;
     int http_persistent;
     chunk **chunks_ptr;     /* An array with pointers to chunks */
-    int nr_of_chunks;       /* Nr of chunks available, guarded by count_mutex */
+    int nr_of_chunks;       /* Nr of chunks available, guarded by chunks_mutex */
     int chunks_done;        /* Are all chunks for this request available in the buffer */
     int last_chunk_written; /* Last chunk number that has been written */
 } connection;
@@ -51,8 +51,8 @@ static connection *connections = NULL;  /* an array with pointers to connections
 static connection *connections_tail = NULL;
 static int nr_of_connections = 0;
 static int total_nr_of_connections = 0; /* nr of connections made in total */
-static pthread_mutex_t connections_lock = PTHREAD_MUTEX_INITIALIZER;
-static stats *time_stats;
+static pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;
+static stats *chunk_write_time_stats;
 static stats *conn_count_stats;
 
 
@@ -61,14 +61,14 @@ static void release_request(connection *conn) {
     int64_t release_time = av_gettime() / 1000;
     if (conn->claimed) {
         free(conn->url);
-        pthread_mutex_lock(&conn->count_mutex);
+        pthread_mutex_lock(&conn->chunks_mutex);
         for(int i = 0; i < conn->nr_of_chunks; i++) {
             chunk *chunk = conn->chunks_ptr[i];
             free(chunk->buf);
         }
         av_freep(&conn->chunks_ptr);
         av_dict_free(&conn->options);
-        pthread_mutex_unlock(&conn->count_mutex);
+        pthread_mutex_unlock(&conn->chunks_mutex);
     }
     conn->claimed = 0;
     conn->release_time = release_time;
@@ -87,10 +87,10 @@ static void abort_if_needed(int mustSucceed) {
 }
 
 static void force_release_connection(connection *conn) {
-    pthread_mutex_lock(&connections_lock);
+    pthread_mutex_lock(&connections_mutex);
     conn->opened = 0;
     release_request(conn);
-    pthread_mutex_unlock(&connections_lock);
+    pthread_mutex_unlock(&connections_mutex);
 }
 
 static void write_chunk(connection *conn, int chunk_nr) {
@@ -100,9 +100,9 @@ static void write_chunk(connection *conn, int chunk_nr) {
     int64_t after_write_time_ms;
     chunk *chunk;
 
-    pthread_mutex_lock(&conn->count_mutex);
+    pthread_mutex_lock(&conn->chunks_mutex);
     chunk = conn->chunks_ptr[chunk_nr];
-    pthread_mutex_unlock(&conn->count_mutex);
+    pthread_mutex_unlock(&conn->chunks_mutex);
 
     if (!conn->out) {
         av_log(NULL, AV_LOG_WARNING, "Connection not open so skip avio_write. Chunk_nr: %d, conn_nr: %d, url: %s\n", chunk_nr, conn->nr, conn->url);
@@ -134,7 +134,7 @@ static void write_chunk(connection *conn, int chunk_nr) {
         av_log(NULL, AV_LOG_WARNING, "It took %"PRId64"(ms) to flush chunk %d. conn_nr: %d\n", flush_time_ms, chunk_nr, conn->nr);
     }
 
-    print_time_stats(time_stats, av_gettime() / 1000 - start_time_ms);
+    print_time_stats(chunk_write_time_stats, av_gettime() / 1000 - start_time_ms);
     print_time_stats(conn_count_stats, nr_of_connections);
 }
 
@@ -168,9 +168,9 @@ static int io_open_for_retry(connection *conn) {
             return ret;
         }
 
-        pthread_mutex_lock(&connections_lock);
+        pthread_mutex_lock(&connections_mutex);
         conn->opened = 1;
-        pthread_mutex_unlock(&connections_lock);
+        pthread_mutex_unlock(&connections_mutex);
         return 0;
     }
 
@@ -230,9 +230,9 @@ static void retry(connection *conn) {
 
     for (int i = 0; i < conn->nr_of_chunks; i++) {
         chunk *chunk;
-        pthread_mutex_lock(&conn->count_mutex);
+        pthread_mutex_lock(&conn->chunks_mutex);
         chunk = conn->chunks_ptr[i];
-        pthread_mutex_unlock(&conn->count_mutex);
+        pthread_mutex_unlock(&conn->chunks_mutex);
 
         write_chunk(conn, chunk->nr);
     }
@@ -266,17 +266,17 @@ static void remove_from_list(connection *conn) {
 
 /**
  * Remove a connection from the list and free it's memory.
- * This method expects the connections_lock to be active.
+ * This method expects the connections_mutex to be active.
  */
 static void remove_conn(connection *conn) {
     remove_from_list(conn);
 
     av_log(NULL, AV_LOG_INFO, "tail: %d\n", connections_tail->nr);
-    pthread_mutex_destroy(&conn->count_mutex);
-    pthread_cond_destroy(&conn->count_threshold_cv);
+    pthread_mutex_destroy(&conn->chunks_mutex);
+    pthread_cond_destroy(&conn->chunks_mutex_cv);
     nr_of_connections--;
     free(conn);
-    pthread_mutex_unlock(&connections_lock);
+    pthread_mutex_unlock(&connections_mutex);
     pthread_exit(NULL);
 }
 
@@ -307,20 +307,20 @@ static void *thr_io_close(connection *conn) {
         av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, response_code: %d, url: %s.\n", ret, conn->nr, response_code, conn->url);
         abort_if_needed(conn->must_succeed);
         ff_format_io_close(conn->s, &conn->out);
-        pthread_mutex_lock(&connections_lock);
+        pthread_mutex_lock(&connections_mutex);
         conn->opened = 0;
-        pthread_mutex_unlock(&connections_lock);
+        pthread_mutex_unlock(&connections_mutex);
 
         if (conn->retry)
             retry(conn);
     }
 
-    pthread_mutex_lock(&connections_lock);
+    pthread_mutex_lock(&connections_mutex);
     release_request(conn);
     if (conn->opened == 0) {
         remove_conn(conn);
     }
-    pthread_mutex_unlock(&connections_lock);
+    pthread_mutex_unlock(&connections_mutex);
 
     return NULL;
 }
@@ -334,13 +334,13 @@ static void *thr_io_write(void *arg) {
     //https://computing.llnl.gov/tutorials/pthreads/#ConditionVariables
 
     for (;;) {
-        pthread_mutex_lock(&conn->count_mutex);
+        pthread_mutex_lock(&conn->chunks_mutex);
 
         while (conn->last_chunk_written >= conn->nr_of_chunks && !conn->chunks_done) {
-            pthread_cond_wait(&conn->count_threshold_cv, &conn->count_mutex);
+            pthread_cond_wait(&conn->chunks_mutex_cv, &conn->chunks_mutex);
         }
 
-        pthread_mutex_unlock(&conn->count_mutex);
+        pthread_mutex_unlock(&conn->chunks_mutex);
 
         if (conn->last_chunk_written < conn->nr_of_chunks) {
             write_chunk(conn, conn->last_chunk_written);
@@ -368,7 +368,7 @@ static int claim_connection(char *url, int need_new_connection) {
     connection *conn;
     connection *conn_l = connections;
     size_t len;
-    pthread_mutex_lock(&connections_lock);
+    pthread_mutex_lock(&connections_mutex);
 
     while (conn_l) {
         if (!conn_l->claimed) {
@@ -390,8 +390,8 @@ static int claim_connection(char *url, int need_new_connection) {
         conn->nr = conn_nr;
         nr_of_connections++;
         total_nr_of_connections++;
-        pthread_mutex_init(&conn->count_mutex, NULL);
-        pthread_cond_init(&conn->count_threshold_cv, NULL);
+        pthread_mutex_init(&conn->chunks_mutex, NULL);
+        pthread_cond_init(&conn->chunks_mutex_cv, NULL);
 
         if(pthread_create(&conn->w_thread, NULL, thr_io_write, conn)) {
             av_log(NULL, AV_LOG_ERROR, "Error creating thread so abort.\n");
@@ -426,7 +426,7 @@ static int claim_connection(char *url, int need_new_connection) {
     av_strlcpy(conn->url, url, len);
     conn->claimed = 1;
     conn->nr = conn_nr;
-    pthread_mutex_unlock(&connections_lock);
+    pthread_mutex_unlock(&connections_mutex);
     return conn_nr;
 }
 
@@ -503,9 +503,9 @@ int pool_io_open(AVFormatContext *s, char *filename,
                 return conn_nr;
             }
 
-            pthread_mutex_lock(&connections_lock);
+            pthread_mutex_lock(&connections_mutex);
             conn->opened = 1;
-            pthread_mutex_unlock(&connections_lock);
+            pthread_mutex_unlock(&connections_mutex);
             return conn_nr;
         }
 
@@ -550,9 +550,9 @@ void pool_io_close(AVFormatContext *s, char *filename, int conn_nr) {
 
     conn->chunks_done = 1;
 
-    pthread_mutex_lock(&conn->count_mutex);
-    pthread_cond_signal(&conn->count_threshold_cv);
-    pthread_mutex_unlock(&conn->count_mutex);
+    pthread_mutex_lock(&conn->chunks_mutex);
+    pthread_cond_signal(&conn->chunks_mutex_cv);
+    pthread_mutex_unlock(&conn->chunks_mutex);
 }
 
 void pool_free(AVFormatContext *s, int conn_nr) {
@@ -608,17 +608,17 @@ void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
     }
     memcpy(chunk->buf, buf, size);
 
-    pthread_mutex_lock(&conn->count_mutex);
+    pthread_mutex_lock(&conn->chunks_mutex);
     av_dynarray_add(&conn->chunks_ptr, &conn->nr_of_chunks, chunk);
-    pthread_mutex_unlock(&conn->count_mutex);
+    pthread_mutex_unlock(&conn->chunks_mutex);
 
     if (conn->opened_error) {
         return;
     }
 
-    pthread_mutex_lock(&conn->count_mutex);
-    pthread_cond_signal(&conn->count_threshold_cv);
-    pthread_mutex_unlock(&conn->count_mutex);
+    pthread_mutex_lock(&conn->chunks_mutex);
+    pthread_cond_signal(&conn->chunks_mutex_cv);
+    pthread_mutex_unlock(&conn->chunks_mutex);
 }
 
 int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
@@ -652,12 +652,6 @@ void pool_get_context(AVIOContext **out, int conn_nr) {
 }
 
 void pool_init() {
-    time_stats = init_time_stats("Chunk write time (ms)", 5 * 1000000);
+    chunk_write_time_stats = init_time_stats("Chunk write time (ms)", 5 * 1000000);
     conn_count_stats = init_time_stats("Nr of connections:", 5 * 1000000);
 }
-
-/*
-  TODO: cleanup?
-  pthread_mutex_destroy(&count_mutex);
-  pthread_cond_destroy(&count_threshold_cv);
- */
