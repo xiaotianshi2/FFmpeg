@@ -27,10 +27,12 @@ typedef struct connection {
     int64_t release_time; /* Time the last request of the connection has finished */
     AVFormatContext *s;   /* Used to clean up the TCP connection if closing of a request fails */
     pthread_t w_thread;   /* Thread that is used to write the chunks */
-    pthread_mutex_t count_mutex;
-    pthread_cond_t count_threshold_cv;
     struct connection *next; /* Pointer to the next connection in the list */
     struct connection *prev; /* Pointer to the previous connection in the list */
+
+    //Request data that is not cleaned between requests
+    pthread_mutex_t count_mutex;
+    pthread_cond_t count_threshold_cv;
 
     //Request specific data
     int must_succeed;       /* If 1 the request must succeed, otherwise we'll crash the program */
@@ -39,13 +41,13 @@ typedef struct connection {
     char *url;              /* url of the current request */
     AVDictionary *options;
     int http_persistent;
-    chunk **chunks_ptr;   /* An array with pointers to chunks */
+    chunk **chunks_ptr;     /* An array with pointers to chunks */
     int nr_of_chunks;       /* Nr of chunks available, guarded by count_mutex */
     int chunks_done;        /* Are all chunks for this request available in the buffer */
     int last_chunk_written; /* Last chunk number that has been written */
 } connection;
 
-static connection *connections = NULL; /* an array with pointers to connections */
+static connection *connections = NULL;  /* an array with pointers to connections */
 static connection *connections_tail = NULL;
 static int nr_of_connections = 0;
 static int total_nr_of_connections = 0; /* nr of connections made in total */
@@ -151,50 +153,39 @@ static connection *get_conn(int conn_nr) {
     abort();
 }
 
-static void write_flush(const unsigned char *buf, int size, int conn_nr, int keep_thread) {
-    connection *conn;
-    chunk *chunk;
+static int io_open_for_retry(connection *conn) {
+    URLContext *http_url_context;
+    int ret;
+    AVFormatContext *s = conn->s;
 
+    if (!conn->opened) {
+        av_log(s, AV_LOG_INFO, "Connection(%d) for retry: %d not yet open %s\n", conn->nr, conn->retry_nr, conn->url);
 
-    if (conn_nr < 0) {
-        av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_write_flush): %d\n", conn_nr);
-        return;
+        ret = s->io_open(s, &(conn->out), conn->url, AVIO_FLAG_WRITE, &conn->options);
+        if (ret < 0) {
+            av_log(s, AV_LOG_WARNING, "io_open_for_retry %d could not open %s\n", conn->retry_nr, conn->url);
+            conn->opened_error = 1;
+            return ret;
+        }
+
+        pthread_mutex_lock(&connections_lock);
+        conn->opened = 1;
+        pthread_mutex_unlock(&connections_lock);
+        return 0;
     }
 
-    conn = get_conn(conn_nr);
+    http_url_context = ffio_geturlcontext(conn->out);
+    av_assert0(http_url_context);
 
-    if (!conn->opened && !conn->opened_error) {
-        av_log(NULL, AV_LOG_WARNING, "connection closed (pool_write_flush). conn_nr: %d, url: %s\n", conn_nr, conn->url);
-        return;
+    ret = ff_http_do_new_request(http_url_context, conn->url);
+    if (ret != 0) {
+        int64_t curr_time_ms = av_gettime() / 1000;
+        int64_t idle_tims_ms = curr_time_ms - conn->release_time;
+        av_log(s, AV_LOG_WARNING, "io_open_for_retry error conn_nr: %d, idle_time: %"PRId64", error: %d, retry_nr: %d, url: %s\n", conn->nr, idle_tims_ms, ret, conn->retry_nr, conn->url);
+        ff_format_io_close(s, &conn->out);
+        return ret;
     }
-
-    //TODO: dont use copied chunks when doing retry
-    //Save the chunk in memory
-    chunk = malloc(sizeof(chunk));
-    chunk->size = size;
-    chunk->nr = conn->nr_of_chunks;
-    chunk->buf = malloc(size);
-    if (chunk->buf == NULL) {
-        av_log(NULL, AV_LOG_WARNING, "Could not malloc (pool_write_flush)\n");
-    }
-    memcpy(chunk->buf, buf, size);
-
-    pthread_mutex_lock(&conn->count_mutex);
-    av_dynarray_add(&conn->chunks_ptr, &conn->nr_of_chunks, chunk);
-    pthread_mutex_unlock(&conn->count_mutex);
-    //av_log(NULL, AV_LOG_INFO, "(%d) claimed mem: %p, addr of first chunk: %p\n", conn->nr, chunk->buf, conn->chunks_ptr[0]->buf);
-
-    if (conn->opened_error) {
-        return;
-    }
-
-    if (keep_thread) {
-        write_chunk(conn, chunk->nr);
-    } else {
-        pthread_mutex_lock(&conn->count_mutex);
-        pthread_cond_signal(&conn->count_threshold_cv);
-        pthread_mutex_unlock(&conn->count_mutex);
-    }
+    return 0;
 }
 
 /**
@@ -202,10 +193,8 @@ static void write_flush(const unsigned char *buf, int size, int conn_nr, int kee
  * We assume this method is ran from one of our own threads so we can safely use usleep.
  */
 static void retry(connection *conn) {
-    int retry_conn_nr = -1;
-    connection *retry_conn;
     int chunk_wait_timeout = 10;
-    int conn_open_error = 0;
+    int ret = 0;
 
     if (conn->retry_nr > 10) {
         av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, attempt: %d, orig conn_nr: %d.\n",
@@ -227,44 +216,29 @@ static void retry(connection *conn) {
         av_log(NULL, AV_LOG_ERROR, "Retry could not collect all chunks for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
     }
 
+    conn->retry_nr = conn->retry_nr + 1;
+
     av_log(NULL, AV_LOG_WARNING, "Starting retry for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
-    retry_conn_nr = pool_io_open(conn->s, conn->url,
-                                 &conn->options, conn->http_persistent, conn->must_succeed, 1, 1);
+    ret = io_open_for_retry(conn);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, conn_nr: %d.\n",
+               conn->url, ret, conn->retry_nr, conn->nr);
 
-    if (retry_conn_nr >= 0) {
-        retry_conn = get_conn(retry_conn_nr);
-        if (retry_conn->opened_error) {
-            conn_open_error = 1;
-        }
-    } else {
-        conn_open_error = 1;
-    }
-
-    if (conn_open_error) {
-        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, orig conn_nr: %d.\n",
-               conn->url, retry_conn_nr, conn->retry_nr, conn->nr);
-
-        conn->retry_nr = conn->retry_nr + 1;
-        //restart request with the same conn as we could not open the request and retry_conn is not initialized properly.
         retry(conn);
-        // TODO: clean conn
         return;
     }
 
-    retry_conn = get_conn(retry_conn_nr);
-    retry_conn->retry_nr = conn->retry_nr + 1;
-
-    for(int i = 0; i < conn->nr_of_chunks; i++) {
+    for (int i = 0; i < conn->nr_of_chunks; i++) {
         chunk *chunk;
         pthread_mutex_lock(&conn->count_mutex);
         chunk = conn->chunks_ptr[i];
         pthread_mutex_unlock(&conn->count_mutex);
 
-        write_flush(chunk->buf, chunk->size, retry_conn_nr, 1);
+        write_chunk(conn, chunk->nr);
     }
 
-    pool_io_close(retry_conn->s, retry_conn->url, retry_conn_nr);
-    av_log(NULL, AV_LOG_INFO, "request retry done. Request: %s, orig conn_nr: %d, new conn_nr:%d.\n", conn->url, conn->nr, retry_conn_nr);
+    pool_io_close(conn->s, conn->url, conn->nr);
+    av_log(NULL, AV_LOG_INFO, "request retry done. Request: %s, conn_nr: %d, attempt: %d.\n", conn->url, conn->nr, conn->retry_nr);
 }
 
 static void remove_from_list(connection *conn) {
@@ -302,13 +276,14 @@ static void remove_conn(connection *conn) {
     pthread_cond_destroy(&conn->count_threshold_cv);
     nr_of_connections--;
     free(conn);
+    pthread_mutex_unlock(&connections_lock);
+    pthread_exit(NULL);
 }
 
 /**
  * This method closes the request and reads the response.
  */
-static void *thr_io_close(void *arg) {
-    connection *conn = (connection *)arg;
+static void *thr_io_close(connection *conn) {
     int ret;
     int response_code;
 
@@ -408,6 +383,7 @@ static int claim_connection(char *url, int need_new_connection) {
 
     if (conn_nr == -1) {
         conn = calloc(1, sizeof(*conn));
+        //TODO: In theory when we have a rollover of total_nr_of_connections we could claim a connection number that is still in use.
         conn_nr = total_nr_of_connections;
         conn->last_chunk_written = 0;
         conn->nr_of_chunks = 0;
@@ -516,7 +492,6 @@ int pool_io_open(AVFormatContext *s, char *filename,
         conn->http_persistent = http_persistent;
         if (!conn->opened) {
             av_log(s, AV_LOG_INFO, "Connection(%d) not yet open %s\n", conn_nr, filename);
-
             ret = s->io_open(s, &(conn->out), filename, AVIO_FLAG_WRITE, options);
             if (ret < 0) {
                 av_log(s, AV_LOG_WARNING, "Could not open %s\n", filename);
@@ -608,7 +583,42 @@ void pool_free_all(AVFormatContext *s) {
 }
 
 void pool_write_flush(const unsigned char *buf, int size, int conn_nr) {
-    write_flush(buf, size, conn_nr, 0);
+    connection *conn;
+    chunk *chunk;
+
+    if (conn_nr < 0) {
+        av_log(NULL, AV_LOG_WARNING, "Invalid conn_nr (pool_write_flush): %d\n", conn_nr);
+        return;
+    }
+
+    conn = get_conn(conn_nr);
+
+    if (!conn->opened && !conn->opened_error) {
+        av_log(NULL, AV_LOG_WARNING, "connection closed (pool_write_flush). conn_nr: %d, url: %s\n", conn_nr, conn->url);
+        return;
+    }
+
+    //Save the chunk in memory
+    chunk = malloc(sizeof(chunk));
+    chunk->size = size;
+    chunk->nr = conn->nr_of_chunks;
+    chunk->buf = malloc(size);
+    if (chunk->buf == NULL) {
+        av_log(NULL, AV_LOG_WARNING, "Could not malloc (pool_write_flush)\n");
+    }
+    memcpy(chunk->buf, buf, size);
+
+    pthread_mutex_lock(&conn->count_mutex);
+    av_dynarray_add(&conn->chunks_ptr, &conn->nr_of_chunks, chunk);
+    pthread_mutex_unlock(&conn->count_mutex);
+
+    if (conn->opened_error) {
+        return;
+    }
+
+    pthread_mutex_lock(&conn->count_mutex);
+    pthread_cond_signal(&conn->count_threshold_cv);
+    pthread_mutex_unlock(&conn->count_mutex);
 }
 
 int pool_avio_write(const unsigned char *buf, int size, int conn_nr) {
