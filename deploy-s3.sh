@@ -11,6 +11,7 @@ set -e
 # Deploy
 version_file="version"
 
+wget -O $version_file "https://s3-eu-west-1.amazonaws.com/joep-lls-deploy/version"
 version=$(cat "$version_file")
 version=$((version+1))
 

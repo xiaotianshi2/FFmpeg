@@ -47,7 +47,6 @@ COPY . /app
 RUN make clean
 
 RUN ./configure  \
-    --enable-gpl \
     --enable-openssl \
     --enable-version3 \
     --enable-static \
@@ -61,7 +60,6 @@ RUN ./configure  \
     --disable-outdev=xv \
     --enable-libx264 \
     --enable-libpulse \
-    --enable-nonfree \
     --enable-vaapi \
     --enable-libfreetype \
     --enable-fontconfig \
