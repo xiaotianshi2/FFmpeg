@@ -105,7 +105,7 @@ static void write_chunk(connection *conn, int chunk_nr) {
     pthread_mutex_unlock(&conn->chunks_mutex);
 
     if (!conn->out) {
-        av_log(NULL, AV_LOG_WARNING, "Connection not open so skip avio_write. Chunk_nr: %d, conn_nr: %d, url: %s\n", chunk_nr, conn->nr, conn->url);
+        av_log(NULL, AV_LOG_WARNING, "Connection not open so skip avio_write. Chunk_nr: %d, conn_nr: %d, url: %s\n", chunk_nr, conn->nr , conn->url);
         return;
     }
 
@@ -139,10 +139,12 @@ static void write_chunk(connection *conn, int chunk_nr) {
 }
 
 static connection *get_conn(int conn_nr) {
+    pthread_mutex_lock(&connections_mutex);
     connection *conn = connections;
 
     while (conn) {
         if (conn->nr == conn_nr) {
+            pthread_mutex_unlock(&connections_mutex);
             return conn;
         }
 
@@ -150,6 +152,7 @@ static connection *get_conn(int conn_nr) {
     }
 
     av_log(NULL, AV_LOG_ERROR, "connection %d not found.\n", conn_nr);
+    av_log(NULL, AV_LOG_ERROR, "First conn_nr: %d.\n", connections->nr);
     abort();
 }
 
@@ -159,11 +162,11 @@ static int io_open_for_retry(connection *conn) {
     AVFormatContext *s = conn->s;
 
     if (!conn->opened) {
-        av_log(s, AV_LOG_INFO, "Connection(%d) for retry: %d not yet open %s\n", conn->nr, conn->retry_nr, conn->url);
+        av_log(s, AV_LOG_INFO, "Connection for retry: %d not yet open. conn_nr: $d, url: %s\n", conn->retry_nr, conn->nr, conn->url);
 
         ret = s->io_open(s, &(conn->out), conn->url, AVIO_FLAG_WRITE, &conn->options);
         if (ret < 0) {
-            av_log(s, AV_LOG_WARNING, "io_open_for_retry %d could not open %s\n", conn->retry_nr, conn->url);
+            av_log(s, AV_LOG_WARNING, "io_open_for_retry %d could not open url: %s\n", conn->retry_nr, conn->url);
             conn->opened_error = 1;
             return ret;
         }
@@ -213,12 +216,12 @@ static void retry(connection *conn) {
         chunk_wait_timeout --;
     }
     if (!conn->chunks_done) {
-        av_log(NULL, AV_LOG_ERROR, "Retry could not collect all chunks for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
+        av_log(NULL, AV_LOG_ERROR, "Retry could not collect all chunks for request %s, attempt: %d, conn_nr: %d\n", conn->url, conn->retry_nr, conn->nr);
     }
 
     conn->retry_nr = conn->retry_nr + 1;
 
-    av_log(NULL, AV_LOG_WARNING, "Starting retry for request %s, attempt: %d, conn: %d\n", conn->url, conn->retry_nr, conn->nr);
+    av_log(NULL, AV_LOG_WARNING, "Starting retry for request %s, attempt: %d, conn_nr: %d\n", conn->url, conn->retry_nr, conn->nr);
     ret = io_open_for_retry(conn);
     if (ret < 0) {
         av_log(NULL, AV_LOG_WARNING, "-event- request retry failed request: %s, ret=%d, attempt: %d, conn_nr: %d.\n",
@@ -319,6 +322,7 @@ static void *thr_io_close(connection *conn) {
     release_request(conn);
     if (conn->opened == 0) {
         remove_conn(conn);
+        //The thread will be stopped at this point
     }
     pthread_mutex_unlock(&connections_mutex);
 
