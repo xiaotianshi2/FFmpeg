@@ -139,8 +139,10 @@ static void write_chunk(connection *conn, int chunk_nr) {
 }
 
 static connection *get_conn(int conn_nr) {
+    connection *conn;
+
     pthread_mutex_lock(&connections_mutex);
-    connection *conn = connections;
+    conn = connections;
 
     while (conn) {
         if (conn->nr == conn_nr) {
@@ -162,7 +164,7 @@ static int io_open_for_retry(connection *conn) {
     AVFormatContext *s = conn->s;
 
     if (!conn->opened) {
-        av_log(s, AV_LOG_INFO, "Connection for retry: %d not yet open. conn_nr: $d, url: %s\n", conn->retry_nr, conn->nr, conn->url);
+        av_log(s, AV_LOG_INFO, "Connection for retry: %d not yet open. conn_nr: %d, url: %s\n", conn->retry_nr, conn->nr, conn->url);
 
         ret = s->io_open(s, &(conn->out), conn->url, AVIO_FLAG_WRITE, &conn->options);
         if (ret < 0) {
@@ -363,10 +365,10 @@ static void *thr_io_write(void *arg) {
 }
 
 /**
- * Claims a free connection and returns the connection number.
+ * Claims a free connection and returns it.
  * Released connections are used first.
  */
-static int claim_connection(char *url, int need_new_connection) {
+static connection *claim_connection(char *url, int need_new_connection) {
     int64_t lowest_release_time = av_gettime() / 1000;
     int conn_nr = -1;
     connection *conn;
@@ -431,7 +433,7 @@ static int claim_connection(char *url, int need_new_connection) {
     conn->claimed = 1;
     conn->nr = conn_nr;
     pthread_mutex_unlock(&connections_mutex);
-    return conn_nr;
+    return conn;
 }
 
 /**
@@ -439,15 +441,14 @@ static int claim_connection(char *url, int need_new_connection) {
  */
 static int open_request(AVFormatContext *s, char *url, AVDictionary **options) {
     int ret;
-    int conn_nr = claim_connection(url, 0);
-    connection *conn = get_conn(conn_nr);
+    connection *conn = claim_connection(url, 0);
 
     if (conn->opened)
-        av_log(s, AV_LOG_WARNING, "open_request while connection might be open. This is TODO for when not using persistent connections. conn_nr: %d\n", conn_nr);
+        av_log(s, AV_LOG_WARNING, "open_request while connection might be open. This is TODO for when not using persistent connections. conn_nr: %d\n", conn->nr);
 
     ret = s->io_open(s, &conn->out, url, AVIO_FLAG_WRITE, options);
     if (ret >= 0) {
-        ret = conn_nr;
+        ret = conn->nr;
         conn->opened = 1;
     }
 
@@ -471,16 +472,13 @@ int pool_io_open(AVFormatContext *s, char *filename,
         av_log(s, AV_LOG_WARNING, "Non HTTP request %s\n", filename);
 #if CONFIG_HTTP_PROTOCOL
     } else {
-        connection *conn;
         URLContext *http_url_context;
         AVDictionary *d = NULL;
 
         //claim new item from pool and open connection if needed
-        int conn_nr = claim_connection(filename, need_new_connection);
-        //Crash when we cannot claim a new connection. We should restart ffmpeg in this case.
-        av_assert0(conn_nr >= 0);
+        connection *conn = claim_connection(filename, need_new_connection);
 
-        conn = get_conn(conn_nr);
+        conn = get_conn(conn->nr);
         conn->must_succeed = must_succeed;
         conn->retry = retry;
         conn->s = s;
@@ -495,7 +493,7 @@ int pool_io_open(AVFormatContext *s, char *filename,
 
         conn->http_persistent = http_persistent;
         if (!conn->opened) {
-            av_log(s, AV_LOG_INFO, "Connection(%d) not yet open %s\n", conn_nr, filename);
+            av_log(s, AV_LOG_INFO, "Connection(%d) not yet open %s\n", conn->nr, filename);
             ret = s->io_open(s, &(conn->out), filename, AVIO_FLAG_WRITE, options);
             if (ret < 0) {
                 av_log(s, AV_LOG_WARNING, "Could not open %s\n", filename);
@@ -504,13 +502,13 @@ int pool_io_open(AVFormatContext *s, char *filename,
                 if (!conn->retry) {
                     return ret;
                 }
-                return conn_nr;
+                return conn->nr;
             }
 
             pthread_mutex_lock(&connections_mutex);
             conn->opened = 1;
             pthread_mutex_unlock(&connections_mutex);
-            return conn_nr;
+            return conn->nr;
         }
 
         http_url_context = ffio_geturlcontext(conn->out);
@@ -520,12 +518,12 @@ int pool_io_open(AVFormatContext *s, char *filename,
         if (ret != 0) {
             int64_t curr_time_ms = av_gettime() / 1000;
             int64_t idle_tims_ms = curr_time_ms - conn->release_time;
-            av_log(s, AV_LOG_WARNING, "pool_io_open error conn_nr: %d, idle_time: %"PRId64", error: %d, name: %s\n", conn_nr, idle_tims_ms, ret, filename);
+            av_log(s, AV_LOG_WARNING, "pool_io_open error conn_nr: %d, idle_time: %"PRId64", error: %d, name: %s\n", conn->nr, idle_tims_ms, ret, filename);
             ff_format_io_close(s, &conn->out);
             abort_if_needed(must_succeed);
             return ret;
         }
-        ret = conn_nr;
+        ret = conn->nr;
 #endif
     }
 
