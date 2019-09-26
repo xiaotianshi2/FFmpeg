@@ -202,14 +202,14 @@ static void retry(connection *conn) {
     int ret = 0;
 
     if (conn->retry_nr > 10) {
-        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, attempt: %d, orig conn_nr: %d.\n",
+        av_log(NULL, AV_LOG_WARNING, "-event- request retry failed. Giving up. request: %s, attempt: %d, conn_nr: %d.\n",
                conn->url, conn->retry_nr, conn->nr);
         return;
     }
 
     usleep(1 * 1000000);
 
-    av_log(NULL, AV_LOG_INFO, "Request retry waiting for segment to be completely recorded. request: %s, attempt: %d, orig conn_nr: %d.\n",
+    av_log(NULL, AV_LOG_INFO, "Request retry waiting for segment to be completely recorded. request: %s, attempt: %d, conn_nr: %d.\n",
         conn->url, conn->retry_nr, conn->nr);
 
     // Wait until all chunks are recorded
