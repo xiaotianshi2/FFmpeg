@@ -55,6 +55,8 @@ static pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;
 static stats *chunk_write_time_stats;
 static stats *conn_count_stats;
 
+//defined here because it has a circular dependency with retry()
+static void *thr_io_close(connection *conn);
 
 /* This method expects the lock to be already done.*/
 static void release_request(connection *conn) {
@@ -242,8 +244,8 @@ static void retry(connection *conn) {
         write_chunk(conn, chunk->nr);
     }
 
-    pool_io_close(conn->s, conn->url, conn->nr);
-    av_log(NULL, AV_LOG_INFO, "request retry done. Request: %s, conn_nr: %d, attempt: %d.\n", conn->url, conn->nr, conn->retry_nr);
+    av_log(NULL, AV_LOG_INFO, "request retry done, start reading response. Request: %s, conn_nr: %d, attempt: %d.\n", conn->url, conn->nr, conn->retry_nr);
+    thr_io_close(conn);
 }
 
 static void remove_from_list(connection *conn) {
