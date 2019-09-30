@@ -523,7 +523,8 @@ int pool_io_open(AVFormatContext *s, char *filename,
             av_log(s, AV_LOG_WARNING, "pool_io_open error conn_nr: %d, idle_time: %"PRId64", error: %d, name: %s\n", conn->nr, idle_tims_ms, ret, filename);
             ff_format_io_close(s, &conn->out);
             abort_if_needed(must_succeed);
-            return ret;
+            conn->opened_error = 1;
+            return conn->nr;
         }
         ret = conn->nr;
 #endif
