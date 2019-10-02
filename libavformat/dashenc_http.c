@@ -524,6 +524,9 @@ int pool_io_open(AVFormatContext *s, char *filename,
             ff_format_io_close(s, &conn->out);
             abort_if_needed(must_succeed);
             conn->opened_error = 1;
+            if (!conn->retry) {
+                return ret;
+            }
             return conn->nr;
         }
         ret = conn->nr;
