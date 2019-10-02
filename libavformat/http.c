@@ -1671,7 +1671,7 @@ static int http_shutdown(URLContext *h, int flags)
             curr_time_ms = av_gettime() / 1000;
             req_time_ms = curr_time_ms - s->start_time_ms;
             av_log(h, AV_LOG_INFO, "HTTP response: %d, duration: %"PRId64", url: %s \n", s->http_code, req_time_ms, s->location);
-            if (s->http_code >= 400) {
+            if (s->http_code >= 400 || s->http_code == 0) {
                 av_log(h, AV_LOG_INFO, "HTTP response data: [%s]\n", buf);
             }
 
