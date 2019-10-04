@@ -140,6 +140,7 @@ typedef struct DASHContext {
     const char *user_agent;
     int hls_playlist;
     int http_persistent;
+    char *headers;
     int master_playlist_created;
     int streaming;
     int64_t timeout;
@@ -461,6 +462,8 @@ static void set_http_options(AVDictionary **options, DASHContext *c)
         av_dict_set_int(options, "multiple_requests", 1, 0);
     if (c->timeout >= 0)
         av_dict_set_int(options, "timeout", c->timeout, 0);
+    if (c->headers)
+        av_dict_set(options, "headers", c->headers, 0);
 }
 
 static void get_hls_playlist_name(char *playlist_name, int string_size,
@@ -2064,6 +2067,7 @@ static const AVOption options[] = {
     { "method", "set the HTTP method", OFFSET(method), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, E },
     { "http_user_agent", "override User-Agent field in HTTP header", OFFSET(user_agent), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, E},
     { "http_persistent", "Use persistent HTTP connections", OFFSET(http_persistent), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, E },
+    { "headers", "set custom HTTP headers, can override built in default headers", OFFSET(headers), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "hls_playlist", "Generate HLS playlist files(master.m3u8, media_%d.m3u8)", OFFSET(hls_playlist), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "streaming", "Enable/Disable streaming mode of output. Each frame will be moof fragment", OFFSET(streaming), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "timeout", "set timeout for socket I/O operations", OFFSET(timeout), AV_OPT_TYPE_DURATION, { .i64 = -1 }, -1, INT_MAX, .flags = E },
