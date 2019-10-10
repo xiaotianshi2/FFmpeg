@@ -1650,10 +1650,8 @@ static int http_shutdown(URLContext *h, int flags)
             char *p, *end;
             //s->hd->flags |= AVIO_FLAG_NONBLOCK;
 
-            /* calls avio.c->ffurl_read() */
-            av_log(h, AV_LOG_WARNING, "http_shutdown - read with prot: %s\n",s->hd->prot->name);
-
             while (status_code == -1) {
+                /* calls avio.c->ffurl_read() */
                 read_ret = ffurl_read(s->hd, buf, sizeof(buf));
 
                 if (read_ret < 1)  {
@@ -1680,8 +1678,6 @@ static int http_shutdown(URLContext *h, int flags)
                     } else {
                         s->http_code = status_code;
                     }
-
-                    av_log(h, AV_LOG_WARNING, "http_shutdown - read_ret: %d, buf: [%s]\n", read_ret, buf);
                 }
             }
 
