@@ -1646,33 +1646,50 @@ static int http_shutdown(URLContext *h, int flags)
         if (!(flags & AVIO_FLAG_READ)) {
             char buf[1024];
             int read_ret;
+            int status_code = -1;
             char *p, *end;
             //s->hd->flags |= AVIO_FLAG_NONBLOCK;
 
             /* calls avio.c->ffurl_read() */
-            read_ret = ffurl_read(s->hd, buf, sizeof(buf));
+            av_log(h, AV_LOG_WARNING, "http_shutdown - read with prot: %s\n",s->hd->prot->name);
 
-            if (read_ret < 0)  {
-                s->http_code = 0;
-            } else {
-                //Find start of http status code
-                p = buf;
-                while (*p != '/' && *p != '\0')
-                    p++;
-                while (*p == '/')
-                    p++;
-                while (!av_isspace(*p) && *p != '\0')
-                    p++;
-                while (av_isspace(*p))
-                    p++;
-                s->http_code = strtol(p, &end, 10);
+            while (status_code == -1) {
+                read_ret = ffurl_read(s->hd, buf, sizeof(buf));
+
+                if (read_ret < 1)  {
+                    status_code = 0;
+                    s->http_code = 0;
+                } else {
+                    //Find start of http status code
+                    p = strstr(buf, "HTTP");
+	                if (p == NULL)
+                        continue;
+
+                    while (*p != '/' && *p != '\0')
+                        p++;
+                    while (*p == '/')
+                        p++;
+                    while (!av_isspace(*p) && *p != '\0')
+                        p++;
+                    while (av_isspace(*p))
+                        p++;
+
+                    status_code = strtol(p, &end, 10);
+                    if (status_code == 0) {
+                        status_code = -1;
+                    } else {
+                        s->http_code = status_code;
+                    }
+
+                    av_log(h, AV_LOG_WARNING, "http_shutdown - read_ret: %d, buf: [%s]\n", read_ret, buf);
+                }
             }
 
             curr_time_ms = av_gettime() / 1000;
             req_time_ms = curr_time_ms - s->start_time_ms;
             av_log(h, AV_LOG_INFO, "HTTP response: %d, duration: %"PRId64", url: %s \n", s->http_code, req_time_ms, s->location);
             if (s->http_code >= 400 || s->http_code == 0) {
-                av_log(h, AV_LOG_INFO, "HTTP response data: [%s]\n", buf);
+                av_log(h, AV_LOG_INFO, "HTTP response. url: %s, data: [%s]\n", s->location, buf);
             }
 
             if (read_ret < 0 && read_ret != AVERROR(EAGAIN))
