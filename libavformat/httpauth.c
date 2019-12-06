@@ -344,7 +344,9 @@ char *ff_http_auth_create_response(HTTPAuthState *state, const char *auth,
                                    const char *path, const char *method)
 {
     char *authstr = NULL;
-
+    if (state->auth_type == HTTP_AUTH_NONE) {
+        av_log(NULL, AV_LOG_INFO, "HTTP_AUTH_NONE response invoked\n");
+    }
     /* Clear the stale flag, we assume the auth is ok now. It is reset
      * by the server headers if there's a new issue. */
     state->stale = 0;
@@ -352,6 +354,7 @@ char *ff_http_auth_create_response(HTTPAuthState *state, const char *auth,
         return NULL;
 
     if (state->auth_type == HTTP_AUTH_BASIC) {
+        av_log(NULL, AV_LOG_INFO, "HTTP_AUTH_BASIC response is invoked\n");
         int auth_b64_len, len;
         char *ptr, *decoded_auth = ff_urldecode(auth);
 
@@ -373,8 +376,8 @@ char *ff_http_auth_create_response(HTTPAuthState *state, const char *auth,
         av_strlcat(ptr, "\r\n", len - (ptr - authstr));
         av_free(decoded_auth);
     } else if (state->auth_type == HTTP_AUTH_DIGEST) {
+        av_log(NULL, AV_LOG_INFO, "HTTP_AUTH_DIGEST response is invoked\n");
         char *username = ff_urldecode(auth), *password;
-
         if (!username)
             return NULL;
 
