@@ -195,16 +195,17 @@ static char *make_digest_auth(HTTPAuthState *state, const char *username,
         if (!md5ctx)
             return NULL;
         av_md5_init(md5ctx);
-        if (!strcmp(digest->algorithm, "MD5-sess")) {
-            update_md5_strings(md5ctx, A1hash, ":", digest->nonce, ":", cnonce, NULL);
-        }
-        else {
-            update_md5_strings(md5ctx, username, ":", state->realm, ":", password, NULL);
-        }
+        update_md5_strings(md5ctx, username, ":", state->realm, ":", password, NULL);
         av_md5_final(md5ctx, hash);
         ff_data_to_hex(A1hash, hash, 16, 1);
         A1hash[32] = 0;
-
+        if (!strcmp(digest->algorithm, "MD5-sess")) {
+            av_md5_init(md5ctx);
+            update_md5_strings(md5ctx, A1hash, ":", digest->nonce, ":", cnonce, NULL);
+            av_md5_final(md5ctx, hash);
+            ff_data_to_hex(A1hash, hash, 16, 1);
+            A1hash[32] = 0;
+        }
         av_md5_init(md5ctx);
         update_md5_strings(md5ctx, method, ":", uri, NULL);
         av_md5_final(md5ctx, hash);
@@ -228,16 +229,17 @@ static char *make_digest_auth(HTTPAuthState *state, const char *username,
         if (!sha256ctx)
             return NULL;
         av_sha_init(sha256ctx, 256);
-        if (!strcmp(digest->algorithm, "SHA-256-sess")) {
-            update_sha256_strings(sha256ctx, A1hash, ":", digest->nonce, ":", cnonce, NULL);
-        }
-        else {
-            update_sha256_strings(sha256ctx, username, ":", state->realm, ":", password, NULL);
-        }
+        update_sha256_strings(sha256ctx, username, ":", state->realm, ":", password, NULL);
         av_sha_final(sha256ctx, hash);
         ff_data_to_hex(A1hash, hash, 16, 1);
         A1hash[32] = 0;
-
+        if (!strcmp(digest->algorithm, "SHA-256-sess")) {
+            av_sha_init(sha256ctx, 256);
+            update_sha256_strings(sha256ctx, A1hash, ":", digest->nonce, ":", cnonce, NULL);
+            av_sha_final(sha256ctx, hash);
+            ff_data_to_hex(A1hash, hash, 16, 1);
+            A1hash[32] = 0;
+        }
         av_sha_init(sha256ctx, 256);
         update_sha256_strings(sha256ctx, method, ":", uri, NULL);
         av_sha_final(sha256ctx, hash);
@@ -261,16 +263,17 @@ static char *make_digest_auth(HTTPAuthState *state, const char *username,
         if (!sha512ctx)
             return NULL;
         av_sha512_init(sha512ctx, 256);
-        if (!strcmp(digest->algorithm, "SHA-512-256-sess")) {
-            update_sha512_strings(sha512ctx, A1hash, ":", digest->nonce, ":", cnonce, NULL);
-        }
-        else {
-            update_sha512_strings(sha512ctx, username, ":", state->realm, ":", password, NULL);
-        }
+        update_sha512_strings(sha512ctx, username, ":", state->realm, ":", password, NULL);
         av_sha512_final(sha512ctx, hash);
         ff_data_to_hex(A1hash, hash, 16, 1);
         A1hash[32] = 0;
-
+        if (!strcmp(digest->algorithm, "SHA-512-256-sess")) {
+            av_sha512_init(sha512ctx, 256);
+            update_sha512_strings(sha512ctx, A1hash, ":", digest->nonce, ":", cnonce, NULL);
+            av_sha512_final(sha512ctx, hash);
+            ff_data_to_hex(A1hash, hash, 16, 1);
+            A1hash[32] = 0;
+        }
         av_sha512_init(sha512ctx, 256);
         update_sha512_strings(sha512ctx, method, ":", uri, NULL);
         av_sha512_final(sha512ctx, hash);
