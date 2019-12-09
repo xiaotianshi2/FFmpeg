@@ -313,7 +313,11 @@ static void *thr_io_close(connection *conn) {
     if (ret < 0 || response_code >= 500) {
         av_log(NULL, AV_LOG_INFO, "-event- request failed ret=%d, conn_nr: %d, response_code: %d, url: %s.\n", ret, conn->nr, response_code, conn->url);
         abort_if_needed(conn->must_succeed);
-        ff_format_io_close(conn->s, &conn->out);
+        //must check if this is NULL or it causes crash on segmentation fault due to NULL pointer
+        //check why conn->s (AVFormatContext) becomes NULL
+        if (conn->s != NULL) { 
+            ff_format_io_close(conn->s, &conn->out);
+        }
         pthread_mutex_lock(&connections_mutex);
         conn->opened = 0;
         pthread_mutex_unlock(&connections_mutex);
