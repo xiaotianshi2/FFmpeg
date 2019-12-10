@@ -422,6 +422,7 @@ char *ff_http_auth_create_response(HTTPAuthState *state, const char *auth,
                                    const char *path, const char *method)
 {
     char *authstr = NULL;
+
     /* Clear the stale flag, we assume the auth is ok now. It is reset
      * by the server headers if there's a new issue. */
     state->stale = 0;
@@ -451,6 +452,7 @@ char *ff_http_auth_create_response(HTTPAuthState *state, const char *auth,
         av_free(decoded_auth);
     } else if (state->auth_type == HTTP_AUTH_DIGEST) {
         char *username = ff_urldecode(auth), *password;
+
         if (!username)
             return NULL;
 

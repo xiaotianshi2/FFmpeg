@@ -1288,7 +1288,6 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
              proxyauthstr ? "Proxy-" : "", proxyauthstr ? proxyauthstr : "");
 
     av_log(h, AV_LOG_DEBUG, "request: %s\n", s->buffer);
-    //av_log(h, AV_LOG_INFO, "request: %s\n", s->buffer);
 
     if (strlen(headers) + 1 == sizeof(headers) ||
         ret >= sizeof(s->buffer)) {
