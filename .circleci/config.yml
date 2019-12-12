@@ -1,0 +1,20 @@
+version: 2
+
+workflows:
+  version: 2
+  dist-compile:
+    jobs:
+      - compile:
+          filters:
+            branches:
+              only:  # only branches matching the below regex filters will run
+                - exmg-lls
+
+
+jobs:
+  compile:
+    parallelism: 2
+    docker:
+      - image: gcc:8.2
+    steps:
+      - checkout
