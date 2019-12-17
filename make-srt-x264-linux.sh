@@ -24,6 +24,7 @@ export PATH=$PATH:/usr/local/cuda/bin
   --extra-cflags="-I/usr/local/cuda/include/" \
   --extra-ldflags="-L/usr/local/cuda/lib64/" \
   --enable-libx264 \
+   --enable-libvpx \
   --enable-protocol=libsrt\
   --enable-libsrt \
   --enable-nonfree \
