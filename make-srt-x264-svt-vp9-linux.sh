@@ -4,6 +4,7 @@
 # build result written to the output directory so we can easily link against it
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig
 export PATH=$PATH:/usr/local/cuda/bin
+export LIBVA_DRIVER_NAME=iHD
 ./configure \
   --enable-version3 \
   --disable-sdl2 \
@@ -15,14 +16,7 @@ export PATH=$PATH:/usr/local/cuda/bin
   --disable-outdev=sndio \
   --disable-outdev=xv \
   --enable-libpulse \
-  --enable-libvmaf \
   --enable-gpl \
-  --enable-cuda-nvcc \
-  --enable-cuvid \
-  --enable-nvenc \
-  --enable-libnpp \
-  --extra-cflags="-I/usr/local/cuda/include/" \
-  --extra-ldflags="-L/usr/local/cuda/lib64/" \
   --enable-libx264 \
   --enable-libvpx \
   --enable-libsvtvp9 \
@@ -45,6 +39,7 @@ cp ffmpeg ../exmachina-ffmpeg-example-f9117b8783ef/.
 # sudo apt-get install libvpx-dev
 
 #svt-vp9 libraray install notes:
+#sudo apt-get install yasm
 #git clone https://github.com/OpenVisualCloud/SVT-VP9
 #cd SVT-VP9
 #cd Build && cmake .. && make -j4 && sudo make install
