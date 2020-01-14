@@ -2,6 +2,7 @@
 
 # enable-version3 enables LGPL licence version 3
 # build result written to the output directory so we can easily link against it
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig
 export PATH=$PATH:/usr/local/cuda/bin
 export LIBVA_DRIVER_NAME=iHD
@@ -42,10 +43,7 @@ cp ffmpeg ../exmachina-ffmpeg-example-f9117b8783ef/.
 #sudo apt-get install yasm
 #git clone https://github.com/OpenVisualCloud/SVT-VP9
 #cd SVT-VP9
-#cd Build && cmake .. && make -j4 && sudo make install
-#cd /usr/lib
-#sudo ln -s /usr/local/lib/libSvtVp9Enc.so .
-#sudo ln -s /usr/local/lib/libSvtVp9Enc.so.1 .
+#./build release static install
 #cd to folder "../FFmpeg"
-#git apply ../SVT-VP9/ffmpeg_plugin/0001-Add-ability-for-ffmpeg-to-run-svt-vp9.patch
-#./make-srt-x264-svt-vp9-linux.sh
+#git am ../SVT-VP9/ffmpeg_plugin/0001-Add-ability-for-ffmpeg-to-run-svt-vp9.patch
+#./make-srt-x264-vp9-svtvp9-linux.sh

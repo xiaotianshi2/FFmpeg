@@ -39,7 +39,7 @@ cp ffmpeg ../../exmachina-ffmpeg-example-7439fd887d01/.
 #svt-hevc libraray install notes:
 #git clone https://github.com/OpenVisualCloud/SVT-HEVC.git
 #cd SVT-HEVC/Build/linux
-#cd ./build release static install
+#./build release static install
 #cd to folder "../FFmpeg"
 #- git am ../SVT-HEVC/ffmpeg_plugin/0001*.patch
 #./make-srt-x264-vp9-svthevc-linux.sh
