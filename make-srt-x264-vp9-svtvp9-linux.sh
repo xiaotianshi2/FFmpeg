@@ -30,8 +30,10 @@ export LIBVA_DRIVER_NAME=iHD
   --prefix="output"
 
 make -j4
-cp ffmpeg_g ../exmachina-ffmpeg-example-f9117b8783ef/.
-cp ffmpeg ../exmachina-ffmpeg-example-f9117b8783ef/.
+cp ffmpeg_g ../../exmachina-ffmpeg-example-f9117b8783ef/.
+cp ffmpeg ../../exmachina-ffmpeg-example-f9117b8783ef/.
+cp ffmpeg_g ../../exmachina-ffmpeg-example-7439fd887d01/.
+cp ffmpeg ../../exmachina-ffmpeg-example-7439fd887d01/.
 #note srt configure options ./configure --enable-static --disable-shared --enable-debug
 #cp ffmpeg_g ../playtrivia-video-tests/ffmpeg-exmg-lls-linux
 #cp ffmpeg_g ~/go/src/bitbucket.org/exmachina/video-encoder/assets/ffmpeg-exmg-lls-linux
