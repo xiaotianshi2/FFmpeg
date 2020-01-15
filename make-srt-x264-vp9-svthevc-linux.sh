@@ -2,7 +2,7 @@
 
 # enable-version3 enables LGPL licence version 3
 # build result written to the output directory so we can easily link against it
-export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
 export PATH=$PATH:/usr/local/cuda/bin
 export LIBVA_DRIVER_NAME=iHD
 ./configure \
@@ -17,6 +17,7 @@ export LIBVA_DRIVER_NAME=iHD
   --enable-libpulse \
   --enable-gpl \
   --enable-libx264 \
+  --enable-libx265 \
   --enable-libvpx \
   --enable-libsvthevc \
   --enable-protocol=libsrt\
