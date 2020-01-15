@@ -41,6 +41,9 @@ exec $ffmpeg \
        -rc 1 \
        -tune 0 \
        -asm_type 1 \
+       -aud 1 \
+       -thread_count 0 \
+       -preset 9 \
        -sc_threshold 0 \
        -force_key_frames "expr:gte(t,n_forced*"$segment_size_in_seconds")" \
        -bf 0 \
