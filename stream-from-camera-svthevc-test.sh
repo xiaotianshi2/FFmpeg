@@ -3,7 +3,7 @@
 # Bash setup (exit on error)
 set -e
 export LD_LIBRARY_PATH=/lib:/usr/lib:/usr/local/lib
-export ffmpeg="./ffmpeg_svthevc"
+export ffmpeg="./ffmpeg"
 export segment_size_in_seconds=6
 export window_size_in_segments=20
 export window_extra_segments=31536000
