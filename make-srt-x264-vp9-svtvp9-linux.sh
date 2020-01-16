@@ -19,6 +19,7 @@ export LIBVA_DRIVER_NAME=iHD
   --enable-libpulse \
   --enable-gpl \
   --enable-libx264 \
+  --enable-libx265 \
   --enable-libvpx \
   --enable-libsvthevc \
   --enable-libsvtvp9 \
@@ -41,6 +42,13 @@ cp ffmpeg ../exmachina-ffmpeg-example-7439fd887d01/.
 
 #vp8/vp9 codec library install notes:
 # sudo apt-get install libvpx-dev
+
+#svt-hevc libraray install notes:
+#git clone https://github.com/OpenVisualCloud/SVT-HEVC.git
+#cd SVT-HEVC/Build/linux
+#./build release static install
+#cd to folder "../FFmpeg"
+#- git am ../SVT-HEVC/ffmpeg_plugin/0001*.patch
 
 #svt-vp9 libraray install notes:
 #sudo apt-get install yasm
