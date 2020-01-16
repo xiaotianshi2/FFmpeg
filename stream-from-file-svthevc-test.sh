@@ -9,11 +9,11 @@ export window_size_in_segments=20
 export window_extra_segments=31536000
 export frame_rate_num=25000
 export frame_rate_den=1000
-export input_width=640
-export input_height=480
-export video_bitrate="800k"
+export input_width=1280
+export input_height=720
+export video_bitrate="1000k"
 export audio_bitrate="128k"
-export output_resolution="640x480"
+export output_resolution="1280x720"
 export input="/dev/video0"
 export stream_id=2009574
 
@@ -27,11 +27,7 @@ mkdir -p "local-output/$sub_folder"
 
 exec $ffmpeg \
        -vsync 1 \
-       -f v4l2 \
-       -framerate 25 \
-       -i "$input" \
-       -f rawvideo \
-       -pix_fmt yuv420p \
+       -i GardenAnswer.mp4 \
        -flags +global_header \
        -af aresample=async=1 \
        -c:v libsvt_hevc \
@@ -47,7 +43,6 @@ exec $ffmpeg \
        -force_key_frames "expr:gte(t,n_forced*"$segment_size_in_seconds")" \
        -bf 0 \
        -c:a aac \
-       -b:a $audio_bitrate \
        -seg_duration $segment_size_in_seconds \
        -use_timeline 0 \
        -http_user_agent Akamai_Broadcaster_v1.0 \
