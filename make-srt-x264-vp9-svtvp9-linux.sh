@@ -3,7 +3,7 @@
 # enable-version3 enables LGPL licence version 3
 # build result written to the output directory so we can easily link against it
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib
-export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
 export PATH=$PATH:/usr/local/cuda/bin
 export LIBVA_DRIVER_NAME=iHD
 ./configure \
@@ -20,6 +20,7 @@ export LIBVA_DRIVER_NAME=iHD
   --enable-gpl \
   --enable-libx264 \
   --enable-libvpx \
+  --enable-libsvthevc \
   --enable-libsvtvp9 \
   --enable-protocol=libsrt\
   --enable-libsrt \
@@ -30,10 +31,10 @@ export LIBVA_DRIVER_NAME=iHD
   --prefix="output"
 
 make -j4
-cp ffmpeg_g ../../exmachina-ffmpeg-example-f9117b8783ef/.
-cp ffmpeg ../../exmachina-ffmpeg-example-f9117b8783ef/.
-cp ffmpeg_g ../../exmachina-ffmpeg-example-7439fd887d01/.
-cp ffmpeg ../../exmachina-ffmpeg-example-7439fd887d01/.
+cp ffmpeg_g ../exmachina-ffmpeg-example-f9117b8783ef/.
+cp ffmpeg ../exmachina-ffmpeg-example-f9117b8783ef/.
+cp ffmpeg_g ../exmachina-ffmpeg-example-7439fd887d01/.
+cp ffmpeg ../exmachina-ffmpeg-example-7439fd887d01/.
 #note srt configure options ./configure --enable-static --disable-shared --enable-debug
 #cp ffmpeg_g ../playtrivia-video-tests/ffmpeg-exmg-lls-linux
 #cp ffmpeg_g ~/go/src/bitbucket.org/exmachina/video-encoder/assets/ffmpeg-exmg-lls-linux
