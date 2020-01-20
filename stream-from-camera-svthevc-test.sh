@@ -29,6 +29,7 @@ exec $ffmpeg \
        -vsync 1 \
        -f v4l2 \
        -framerate 25 \
+       -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 \
        -i "$input" \
        -f rawvideo \
        -pix_fmt yuv420p \
