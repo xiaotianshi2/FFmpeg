@@ -37,6 +37,8 @@ exec $ffmpeg \
        -flags +global_header \
        -af aresample=async=1 \
        -c:v libvpx-vp9 \
+       -profile:v 0 \
+       -level 3.0 \
        -crf 60 \
        -deadline realtime \
        -b:v $video_bitrate \
